@@ -114,10 +114,11 @@ async function runWatchCommand({activeStateStore, clock, config, maxIterations, 
  */
 async function runWatchLoop({activeStateStore, clock, config, maxIterations, sleep, stdout, uiSession, watchdog}) {
   let iterations = 0
+  const watchUiSession = watchLoopUiSession(uiSession)
 
   while (true) {
     const state = await activeStateStore.load()
-    const result = await watchdog.rebootIfNeeded({config, state, uiSession})
+    const result = await watchdog.rebootIfNeeded({config, state, uiSession: watchUiSession})
 
     await saveRebootStateIfSuccessful({activeStateStore, clock, rebootResult: result.rebootResult})
     writeJsonLine(stdout, {command: "watch", decision: result.decision, rebootResult: result.rebootResult})
@@ -128,6 +129,39 @@ async function runWatchLoop({activeStateStore, clock, config, maxIterations, sle
     }
 
     await sleep(config.checkIntervalMs)
+  }
+}
+
+/**
+ * @param {{readStatus: (config: Config) => Promise<import("./watchdog.js").GatewayUiStatus>, reboot: (config: Config) => Promise<Record<string, unknown>>}} uiSession - UI session.
+ * @returns {{readStatus: (config: Config) => Promise<import("./watchdog.js").GatewayUiStatus>, reboot: (config: Config) => Promise<Record<string, unknown>>}} Watch-loop UI session.
+ */
+function watchLoopUiSession(uiSession) {
+  return {
+    async readStatus(config) {
+      try {
+        return await uiSession.readStatus(config)
+      } catch {
+        return uiUnreachableStatus()
+      }
+    },
+
+    async reboot(config) {
+      return await uiSession.reboot(config)
+    }
+  }
+}
+
+/**
+ * @returns {import("./watchdog.js").GatewayUiStatus} Synthetic unreachable status.
+ */
+function uiUnreachableStatus() {
+  return {
+    connectionState: "unknown",
+    loginSucceeded: false,
+    uiReachable: false,
+    uptimeMs: null,
+    visibleText: "UI status read failed"
   }
 }
 

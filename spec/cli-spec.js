@@ -160,6 +160,75 @@ describe("CLI", () => {
       expect(savedStates).toEqual([{lastRebootAtMs: 7_200_000}])
     })
   })
+
+  it("watch keeps running after a transient UI status read failure", async () => {
+    await withTempConfig(async (configPath) => {
+      /** @type {string[]} */
+      const stdout = []
+      let readCount = 0
+      /** @type {number[]} */
+      const sleepCalls = []
+      /** @type {FakeUiSession} */
+      const uiSession = {
+        async readStatus() {
+          readCount += 1
+
+          if (readCount === 1) {
+            throw new Error("gateway UI temporarily unavailable")
+          }
+
+          return {
+            connectionState: "healthy",
+            loginSucceeded: true,
+            uiReachable: true,
+            uptimeMs: 3_600_000,
+            visibleText: "Connected"
+          }
+        },
+
+        async reboot() {
+          throw new Error("watch should not reboot after a UI read failure")
+        }
+      }
+
+      const exitCode = await runCli({
+        argv: ["watch", "--config", configPath],
+        maxIterations: 2,
+        sleep: async (ms) => {
+          sleepCalls.push(ms)
+        },
+        stateStore: fakeStateStore(),
+        stdout: {write: (message) => stdout.push(message)},
+        uiSession
+      })
+
+      expect(exitCode).toEqual(0)
+      expect(readCount).toEqual(2)
+      expect(sleepCalls).toEqual([300_000])
+      expect(stdout.map((line) => JSON.parse(line))).toEqual([
+        {
+          command: "watch",
+          decision: {
+            healthReason: "ui_unreachable",
+            nextRebootAllowedAtMs: null,
+            shouldReboot: false,
+            skipReason: null
+          },
+          rebootResult: null
+        },
+        {
+          command: "watch",
+          decision: {
+            healthReason: "healthy",
+            nextRebootAllowedAtMs: null,
+            shouldReboot: false,
+            skipReason: null
+          },
+          rebootResult: null
+        }
+      ])
+    })
+  })
 })
 
 /**
