@@ -99,3 +99,11 @@ Run static checks before finishing changes:
 ```bash
 npm run lint
 ```
+
+Release a patch version from `master`:
+
+```bash
+npm run release:patch
+```
+
+The patch release script bumps the package version, commits the version files, pushes `master`, and publishes to npm.
