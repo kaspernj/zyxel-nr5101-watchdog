@@ -12,6 +12,7 @@ describe("SystemTestingUiSession", () => {
       browserFactory: () => fakeBrowser(calls, {
         connectionState: "healthy",
         loginSucceeded: true,
+        statusLoaded: true,
         uiReachable: true,
         uptimeMs: 3_600_000,
         uptimeText: "0 days 1 hours 0 mins 0 secs",
@@ -79,15 +80,49 @@ describe("SystemTestingUiSession", () => {
 
     expect(status.uptimeMs).toEqual(0)
   })
+
+  it("waits for the NR5101 dashboard to hydrate before reading status", async () => {
+    /** @type {BrowserCall[]} */
+    const calls = []
+    const session = new SystemTestingUiSession({
+      browserFactory: () => fakeBrowser(calls, [
+        {
+          connectionState: "down",
+          loginSucceeded: true,
+          statusLoaded: false,
+          uiReachable: true,
+          uptimeText: "0 days 0 hours 0 mins 0 secs",
+          visibleText: "System Info\nModel Name\nFirmware Version\nSystem Uptime\n0 days 0 hours 0 mins 0 secs\nWAN Status\nConnection down"
+        },
+        {
+          connectionState: "healthy",
+          loginSucceeded: true,
+          statusLoaded: true,
+          uiReachable: true,
+          uptimeText: "0 days 2 hours 5 mins 15 secs",
+          visibleText: "System Info\nModel Name\nNR5101\nFirmware Version\nV1.00(ABVC.8)C0\nSystem Uptime\n0 days 2 hours 5 mins 15 secs\nCellular WAN\nStatus\nUp"
+        }
+      ]),
+      sleep: async () => {}
+    })
+
+    const status = await session.readStatus(testConfig())
+
+    expect(status.connectionState).toEqual("healthy")
+    expect(status.uptimeMs).toEqual(7_515_000)
+    expect(calls.filter((call) => call.method === "executeScript").length).toEqual(3)
+  })
 })
 
 /**
  * @param {BrowserCall[]} calls - Captured browser calls.
- * @param {Record<string, unknown>} scriptResult - Result returned from executeScript.
+ * @param {Record<string, unknown> | Record<string, unknown>[]} scriptResult - Result returned from executeScript.
  * @returns {import("../src/system-testing-ui-session.js").BrowserSession} Fake browser session.
  */
 function fakeBrowser(calls, scriptResult) {
   let executeScriptCount = 0
+  let statusScriptCount = 0
+  const scriptResults = Array.isArray(scriptResult) ? scriptResult : [scriptResult]
 
   return {
     async clearAndSendKeys(selector, value) {
@@ -106,7 +141,10 @@ function fakeBrowser(calls, scriptResult) {
         return true
       }
 
-      return scriptResult
+      const result = scriptResults[Math.min(statusScriptCount, scriptResults.length - 1)]
+      statusScriptCount += 1
+
+      return result
     },
 
     getDriverAdapter() {

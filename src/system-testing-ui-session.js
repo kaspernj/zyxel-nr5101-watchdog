@@ -1,3 +1,4 @@
+import {setTimeout as sleepMs} from "node:timers/promises"
 import {forcedBoolean, forcedNonBlankString, forcedString} from "typanic"
 import {Browser} from "system-testing/build/index.js"
 
@@ -24,6 +25,7 @@ const DEFAULT_LOGIN_BUTTON_SELECTOR = "#loginBtn"
 const DEFAULT_LOGIN_GONE_SELECTOR = "#Login-login, #loginBtn"
 const DEFAULT_PASSWORD_SELECTOR = ".maskPassword#userpassword"
 const DEFAULT_USERNAME_SELECTOR = "#username"
+const STATUS_LOAD_POLL_INTERVAL_MS = 250
 
 const LOGIN_CONTROLS_SCRIPT = String.raw`
 return Boolean(document.querySelector(arguments[0]) && document.querySelector(arguments[1]))
@@ -38,6 +40,7 @@ const uptimeElement = selectors.uptimeText ? document.querySelector(selectors.up
 const visibleText = (statusElement?.innerText || document.body?.innerText || '').trim()
 const uptimeText = (uptimeElement?.innerText || visibleText).trim()
 const normalizedText = visibleText.toLowerCase()
+const statusLoaded = !/\bModel Name\s*\n\s*Firmware Version\s*\n\s*System Uptime\b/i.test(visibleText)
 
 function includesAny(values) {
   return Array.isArray(values) && values.some((value) => {
@@ -55,6 +58,7 @@ else if (includesAny(labels.healthy)) connectionState = 'healthy'
 return {
   connectionState,
   loginSucceeded: !/login failed|invalid password|incorrect password/i.test(visibleText),
+  statusLoaded,
   uiReachable: true,
   uptimeText,
   visibleText
@@ -85,10 +89,14 @@ export default class SystemTestingUiSession {
   /**
    * @param {object} [args] - Constructor arguments.
    * @param {() => BrowserSession} [args.browserFactory] - Browser factory, mainly for tests.
+   * @param {(ms: number) => Promise<void>} [args.sleep] - Sleep function, mainly for tests.
+   * @param {number} [args.statusPollIntervalMs] - Delay between status hydration checks.
    * @param {number} [args.timeoutMs] - Browser command timeout.
    */
-  constructor({browserFactory = () => new Browser(), timeoutMs = 15_000} = {}) {
+  constructor({browserFactory = () => new Browser(), sleep = sleepMs, statusPollIntervalMs = STATUS_LOAD_POLL_INTERVAL_MS, timeoutMs = 15_000} = {}) {
     this.browserFactory = browserFactory
+    this.sleep = sleep
+    this.statusPollIntervalMs = statusPollIntervalMs
     this.timeoutMs = timeoutMs
   }
 
@@ -100,7 +108,7 @@ export default class SystemTestingUiSession {
     return await this.withBrowser(config, async (browser) => {
       await browser.visit("/")
       await this.login({browser, config})
-      const statusResult = await this.executeScript({browser, config, script: READ_STATUS_SCRIPT})
+      const statusResult = await this.loadedStatusResult({browser, config})
 
       return SystemTestingUiSession.statusFromResult(statusResult)
     })
@@ -165,6 +173,31 @@ export default class SystemTestingUiSession {
   }
 
   /**
+   * @param {object} args - Status loading arguments.
+   * @param {BrowserSession} args.browser - Browser session.
+   * @param {import("./config.js").default} args.config - Watchdog config.
+   * @returns {Promise<unknown>} Hydrated browser status result.
+   */
+  async loadedStatusResult({browser, config}) {
+    const statusPollIntervalMs = Math.max(1, this.statusPollIntervalMs)
+    const maxAttempts = Math.max(1, Math.ceil(this.timeoutMs / statusPollIntervalMs))
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const statusResult = await this.executeScript({browser, config, script: READ_STATUS_SCRIPT})
+
+      if (SystemTestingUiSession.statusLoadedFromResult(statusResult)) {
+        return statusResult
+      }
+
+      if (attempt < maxAttempts) {
+        await this.sleep(statusPollIntervalMs)
+      }
+    }
+
+    throw new Error("Timed out waiting for gateway status content to load")
+  }
+
+  /**
    * @param {object} args - Script command arguments.
    * @param {BrowserSession} args.browser - Browser session.
    * @param {import("./config.js").default} args.config - Watchdog config.
@@ -203,6 +236,16 @@ export default class SystemTestingUiSession {
       uptimeMs: SystemTestingUiSession.uptimeMsFromText(forcedString(result.uptimeText, "gateway status uptimeText")),
       visibleText: forcedString(result.visibleText, "gateway status visibleText")
     }
+  }
+
+  /**
+   * @param {unknown} rawStatus - Browser status result.
+   * @returns {boolean} Whether status content has finished loading.
+   */
+  static statusLoadedFromResult(rawStatus) {
+    const result = SystemTestingUiSession.requiredPlainObject(rawStatus, "browser status result")
+
+    return forcedBoolean(result.statusLoaded, "gateway status loaded")
   }
 
   /**
