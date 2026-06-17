@@ -1,5 +1,3 @@
-// @ts-check
-
 import {readFile} from "node:fs/promises"
 import {forcedNonBlankString, optionalNonBlankString, optionalPositiveInteger} from "typanic"
 

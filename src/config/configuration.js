@@ -1,5 +1,3 @@
-// @ts-check
-
 import {fileURLToPath} from "node:url"
 
 import Configuration from "velocious/build/src/configuration.js"

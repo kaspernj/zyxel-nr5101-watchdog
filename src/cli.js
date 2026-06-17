@@ -1,5 +1,3 @@
-// @ts-check
-
 import Config, {DEFAULT_CONFIG_PATH} from "./config.js"
 import StateStore from "./state-store.js"
 import SystemTestingUiSession from "./system-testing-ui-session.js"

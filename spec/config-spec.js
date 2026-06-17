@@ -1,10 +1,10 @@
-// @ts-check
-
 import {mkdtemp, rm, writeFile} from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {describe, expect, it} from "velocious/build/src/testing/test.js"
 import Config from "../src/config.js"
+
+/** @typedef {Record<string, unknown>} ConfigObject */
 
 describe("Config", () => {
   it("loads required router credentials with watchdog defaults", async () => {
@@ -75,6 +75,11 @@ describe("Config", () => {
   })
 })
 
+/**
+ * @param {ConfigObject} configObject - Config object to write.
+ * @param {(configPath: string) => Promise<void>} callback - Callback receiving the config path.
+ * @returns {Promise<void>}
+ */
 async function withTempConfig(configObject, callback) {
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "zyxel-watchdog-config-"))
   const configPath = path.join(tempDirectory, "secrets.json")

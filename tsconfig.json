@@ -13,5 +13,6 @@
     "strict": true,
     "types": ["node"]
   },
-  "include": ["bin/**/*.js", "src/**/*.js"]
+  "include": ["*.js", "bin/**/*.js", "src/**/*.js", "spec/**/*.js"],
+  "exclude": ["build/**", "coverage/**", "node_modules/**", "var/**"]
 }

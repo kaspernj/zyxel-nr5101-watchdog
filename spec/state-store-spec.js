@@ -1,5 +1,3 @@
-// @ts-check
-
 import {mkdtemp, rm} from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -26,6 +24,10 @@ describe("StateStore", () => {
   })
 })
 
+/**
+ * @param {(tempDirectory: string) => Promise<void>} callback - Callback receiving the temporary directory.
+ * @returns {Promise<void>}
+ */
 async function withTempDirectory(callback) {
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "zyxel-watchdog-state-"))
 

@@ -1,7 +1,20 @@
-// @ts-check
-
 import {forcedBoolean, forcedNonBlankString, forcedString, optionalInteger} from "typanic"
 import {Browser} from "system-testing/build/index.js"
+
+/**
+ * @typedef {object} BrowserDriverAdapter
+ * @property {(baseUrl: string) => void} setBaseUrl - Sets the browser base URL.
+ * @property {() => Promise<void>} start - Starts the browser driver.
+ */
+
+/**
+ * @typedef {object} BrowserSession
+ * @property {(script: string, ...args: string[]) => Promise<unknown>} executeScript - Executes script in the browser.
+ * @property {() => BrowserDriverAdapter} getDriverAdapter - Returns the browser driver adapter.
+ * @property {(timeoutMs: number) => Promise<void>} setTimeouts - Sets browser timeouts.
+ * @property {() => Promise<void>} stopDriver - Stops the browser driver.
+ * @property {(path: string) => Promise<void>} visit - Visits a URL or path.
+ */
 
 const LOGIN_SCRIPT = String.raw`
 const config = JSON.parse(arguments[0])
@@ -116,7 +129,7 @@ return {ok: true}
 export default class SystemTestingUiSession {
   /**
    * @param {object} [args] - Constructor arguments.
-   * @param {() => Browser} [args.browserFactory] - Browser factory, mainly for tests.
+   * @param {() => BrowserSession} [args.browserFactory] - Browser factory, mainly for tests.
    * @param {number} [args.timeoutMs] - Browser command timeout.
    */
   constructor({browserFactory = () => new Browser(), timeoutMs = 15_000} = {}) {
@@ -154,7 +167,7 @@ export default class SystemTestingUiSession {
   /**
    * @template T
    * @param {import("./config.js").default} config - Watchdog config.
-   * @param {(browser: Browser) => Promise<T>} callback - Browser callback.
+   * @param {(browser: BrowserSession) => Promise<T>} callback - Browser callback.
    * @returns {Promise<T>} Callback result.
    */
   async withBrowser(config, callback) {
@@ -175,7 +188,7 @@ export default class SystemTestingUiSession {
 
   /**
    * @param {object} args - Script command arguments.
-   * @param {Browser} args.browser - Browser session.
+   * @param {BrowserSession} args.browser - Browser session.
    * @param {import("./config.js").default} args.config - Watchdog config.
    * @param {string} args.script - Browser script body.
    * @returns {Promise<unknown>} Script result.

@@ -1,5 +1,3 @@
-// @ts-check
-
 export const HEALTH_REASONS = Object.freeze({
   bootGracePeriod: "boot_grace_period",
   connectionDown: "connection_down",

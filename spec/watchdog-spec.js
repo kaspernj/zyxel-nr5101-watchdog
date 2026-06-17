@@ -1,8 +1,9 @@
-// @ts-check
-
 import {describe, expect, it} from "velocious/build/src/testing/test.js"
 import Config from "../src/config.js"
 import Watchdog, {HEALTH_REASONS, SKIP_REASONS} from "../src/watchdog.js"
+
+/** @typedef {import("../src/watchdog.js").GatewayUiStatus} GatewayUiStatus */
+/** @typedef {{lastRebootAtMs?: number, nowMs?: number}} EvaluationOptions */
 
 describe("Watchdog", () => {
   it("exposes the required health reasons", () => {
@@ -75,6 +76,11 @@ describe("Watchdog", () => {
   })
 })
 
+/**
+ * @param {Partial<GatewayUiStatus>} statusOverrides - Status fields to override.
+ * @param {EvaluationOptions} [options] - Evaluation options.
+ * @returns {ReturnType<Watchdog["evaluate"]>} Watchdog decision.
+ */
 function evaluateStatus(statusOverrides, options = {}) {
   const config = Config.fromObject({
     password: "secret-password",
@@ -83,16 +89,19 @@ function evaluateStatus(statusOverrides, options = {}) {
   }, {source: "spec"})
   const watchdog = new Watchdog({clock: () => options.nowMs ?? 7_200_000})
 
+  /** @type {GatewayUiStatus} */
+  const status = {
+    connectionState: "unknown",
+    loginSucceeded: true,
+    uiReachable: true,
+    uptimeMs: null,
+    visibleText: "",
+    ...statusOverrides
+  }
+
   return watchdog.evaluate({
     config,
     state: {lastRebootAtMs: options.lastRebootAtMs ?? null},
-    status: {
-      connectionState: "unknown",
-      loginSucceeded: true,
-      uiReachable: true,
-      uptimeMs: null,
-      visibleText: "",
-      ...statusOverrides
-    }
+    status
   })
 }
