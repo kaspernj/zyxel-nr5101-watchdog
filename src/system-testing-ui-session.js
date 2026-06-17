@@ -9,9 +9,9 @@ import {Browser} from "system-testing/build/index.js"
 
 /**
  * @typedef {object} BrowserSession
+ * @property {(selector: string, args?: {timeout?: number, visible?: boolean | null}) => Promise<import("selenium-webdriver").WebElement[]>} all - Finds all elements by selector.
  * @property {(selector: string, value: string) => Promise<void>} clearAndSendKeys - Replaces an input value through browser interactions.
- * @property {(selector: string) => Promise<void>} click - Clicks an element.
- * @property {(script: string, ...args: string[]) => Promise<unknown>} executeScript - Executes script in the browser.
+ * @property {(elementOrSelector: string | import("selenium-webdriver").WebElement) => Promise<void>} click - Clicks an element.
  * @property {(selector: string, args?: {timeout?: number, visible?: boolean | null}) => Promise<boolean>} exists - Checks whether an element exists.
  * @property {() => BrowserDriverAdapter} getDriverAdapter - Returns the browser driver adapter.
  * @property {(timeoutMs: number) => Promise<void>} setTimeouts - Sets browser timeouts.
@@ -26,26 +26,10 @@ const DEFAULT_LOGIN_BUTTON_SELECTOR = "#loginBtn"
 const DEFAULT_LOGIN_GONE_SELECTOR = "#Login-login, #loginBtn"
 const DEFAULT_PASSWORD_SELECTOR = ".maskPassword#userpassword"
 const DEFAULT_USERNAME_SELECTOR = "#username"
+const REBOOT_CONTROL_SELECTOR = "button, input[type='button'], input[type='submit'], a"
+const REBOOT_CONFIRM_TEXT_PATTERN = /confirm|ok|yes/i
+const REBOOT_TEXT_PATTERN = /reboot|restart/i
 const STATUS_LOAD_POLL_INTERVAL_MS = 250
-
-const REBOOT_SCRIPT = String.raw`
-const config = JSON.parse(arguments[0])
-const selectors = config.selectors || {}
-const rebootButton = selectors.rebootButton ? document.querySelector(selectors.rebootButton) : Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"], a')).find((element) => /reboot|restart/i.test(element.innerText || element.value || ''))
-
-if (!rebootButton) {
-  return {ok: false, reason: 'reboot_button_not_found'}
-}
-
-rebootButton.click()
-
-const confirmButton = selectors.rebootConfirmButton ? document.querySelector(selectors.rebootConfirmButton) : Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"], a')).find((element) => /confirm|ok|yes/i.test(element.innerText || element.value || ''))
-if (confirmButton) {
-  confirmButton.click()
-}
-
-return {ok: true}
-`
 
 /** Drives the Zyxel UI through a system-testing Browser session. */
 export default class SystemTestingUiSession {
@@ -86,8 +70,23 @@ export default class SystemTestingUiSession {
     return await this.withBrowser(config, async (browser) => {
       await browser.visit("/")
       await this.login({browser, config})
+      const rebootButtonClicked = await this.clickConfiguredOrMatchingControl({
+        browser,
+        selector: config.selectors.rebootButton,
+        textPattern: REBOOT_TEXT_PATTERN
+      })
 
-      return SystemTestingUiSession.requiredPlainObject(await this.executeScript({browser, config, script: REBOOT_SCRIPT}), "browser reboot result")
+      if (!rebootButtonClicked) {
+        return {ok: false, reason: "reboot_button_not_found"}
+      }
+
+      await this.clickConfiguredOrMatchingControl({
+        browser,
+        selector: config.selectors.rebootConfirmButton,
+        textPattern: REBOOT_CONFIRM_TEXT_PATTERN
+      })
+
+      return {ok: true}
     })
   }
 
@@ -134,6 +133,46 @@ export default class SystemTestingUiSession {
     await browser.clearAndSendKeys(passwordSelector, config.password)
     await browser.click(loginButtonSelector)
     await browser.waitForNoSelector(loginGoneSelector)
+  }
+
+  /**
+   * @param {object} args - Reboot control arguments.
+   * @param {BrowserSession} args.browser - Browser session.
+   * @param {string | null} args.selector - Optional configured control selector.
+   * @param {RegExp} args.textPattern - Text/value pattern used when no selector is configured.
+   * @returns {Promise<boolean>} Whether a matching control was clicked.
+   */
+  async clickConfiguredOrMatchingControl({browser, selector, textPattern}) {
+    if (selector) {
+      if (!await browser.exists(selector, {timeout: 0})) return false
+
+      await browser.click(selector)
+
+      return true
+    }
+
+    const controls = await browser.all(REBOOT_CONTROL_SELECTOR, {timeout: 0})
+
+    for (const control of controls) {
+      if (textPattern.test(await this.controlText(control))) {
+        await browser.click(control)
+
+        return true
+      }
+    }
+
+    return false
+  }
+
+  /**
+   * @param {import("selenium-webdriver").WebElement} control - Candidate control element.
+   * @returns {Promise<string>} Text and value used for matching a control.
+   */
+  async controlText(control) {
+    const text = await control.getText()
+    const value = await control.getAttribute("value")
+
+    return `${text} ${value ?? ""}`
   }
 
   /**
@@ -208,27 +247,6 @@ export default class SystemTestingUiSession {
     if (text.length === 0) return null
 
     return text
-  }
-
-  /**
-   * @param {object} args - Script command arguments.
-   * @param {BrowserSession} args.browser - Browser session.
-   * @param {import("./config.js").default} args.config - Watchdog config.
-   * @param {string} args.script - Browser script body.
-   * @returns {Promise<unknown>} Script result.
-   */
-  async executeScript({browser, config, script}) {
-    return await browser.executeScript(script, SystemTestingUiSession.browserConfigJson(config))
-  }
-
-  /**
-   * @param {import("./config.js").default} config - Watchdog config.
-   * @returns {string} JSON payload for browser scripts.
-   */
-  static browserConfigJson(config) {
-    return JSON.stringify({
-      selectors: config.selectors
-    })
   }
 
   /**
@@ -322,16 +340,4 @@ export default class SystemTestingUiSession {
     return matchedAnyUnit ? totalMs : null
   }
 
-  /**
-   * @param {unknown} raw - Raw value.
-   * @param {string} label - Error label.
-   * @returns {Record<string, unknown>} Validated object.
-   */
-  static requiredPlainObject(raw, label) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      throw new TypeError(`Expected ${label} to be an object`)
-    }
-
-    return /** @type {Record<string, unknown>} */ (raw)
-  }
 }

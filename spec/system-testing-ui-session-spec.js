@@ -41,26 +41,67 @@ describe("SystemTestingUiSession", () => {
   it("uses the system-testing Browser package API to request a UI reboot", async () => {
     /** @type {BrowserCall[]} */
     const calls = []
-    const session = new SystemTestingUiSession({browserFactory: () => fakeBrowser(calls, {ok: true})})
+    const session = new SystemTestingUiSession({browserFactory: () => fakeBrowser(calls, "")})
+
+    const result = await session.reboot(testConfig({
+      selectors: {
+        rebootButton: "#rebootButton",
+        rebootConfirmButton: "#confirmRebootButton"
+      }
+    }))
+
+    expect(result.ok).toEqual(true)
+    expect(calls.map((call) => call.method).includes("executeScript")).toEqual(false)
+    expect(calls.filter((call) => call.method === "click").map((call) => call.args[0])).toEqual(["#loginBtn", "#rebootButton", "#confirmRebootButton"])
+  })
+
+  it("falls back to reboot controls by visible text without injected scripts", async () => {
+    /** @type {BrowserCall[]} */
+    const calls = []
+    const session = new SystemTestingUiSession({
+      browserFactory: () => fakeBrowser(calls, "", {
+        elementLabels: ["Restart", "OK"]
+      })
+    })
 
     const result = await session.reboot(testConfig())
 
     expect(result.ok).toEqual(true)
-    expect(calls.map((call) => call.method)).toEqual([
-      "setBaseUrl",
-      "start",
-      "setTimeouts",
-      "visit",
-      "exists",
-      "exists",
-      "clearAndSendKeys",
-      "clearAndSendKeys",
-      "click",
-      "waitForNoSelector",
-      "executeScript",
-      "stopDriver"
-    ])
-    expect(calls[10].args[0]).toContain("rebootButton")
+    expect(calls.some((call) => call.method === "executeScript")).toEqual(false)
+    expect(calls.filter((call) => call.method === "click").map((call) => call.args[0])).toEqual(["#loginBtn", "Restart", "OK"])
+  })
+
+  it("returns reboot-button-not-found when the configured reboot selector is missing", async () => {
+    /** @type {BrowserCall[]} */
+    const calls = []
+    const session = new SystemTestingUiSession({
+      browserFactory: () => fakeBrowser(calls, "", {missingSelectors: ["#missingRebootButton"]})
+    })
+
+    const result = await session.reboot(testConfig({selectors: {rebootButton: "#missingRebootButton"}}))
+
+    expect(result).toEqual({ok: false, reason: "reboot_button_not_found"})
+    expect(calls.find((call) => call.method === "executeScript")).toEqual(undefined)
+    expect(calls.filter((call) => call.method === "click").map((call) => call.args[0])).toEqual(["#loginBtn"])
+  })
+
+  it("does not fail when a configured reboot confirmation selector is missing", async () => {
+    /** @type {BrowserCall[]} */
+    const calls = []
+    const session = new SystemTestingUiSession({
+      browserFactory: () => fakeBrowser(calls, "", {missingSelectors: ["#missingConfirmButton"]})
+    })
+
+    const result = await session.reboot(testConfig({
+      selectors: {
+        rebootButton: "#rebootButton",
+        rebootConfirmButton: "#missingConfirmButton"
+      }
+    }))
+
+    expect(result.ok).toEqual(true)
+    expect(calls.filter((call) => call.method === "executeScript")).toEqual([])
+    expect(calls.filter((call) => call.method === "click").map((call) => call.args[0])).toEqual(["#loginBtn", "#rebootButton"])
   })
 
   it("parses zero-valued NR5101 uptime text as zero milliseconds", () => {
@@ -122,30 +163,40 @@ describe("SystemTestingUiSession", () => {
 
 /**
  * @param {BrowserCall[]} calls - Captured browser calls.
- * @param {Record<string, unknown> | string | string[]} result - Result returned from executeScript or text.
+ * @param {string | string[]} result - Text returned from body reads.
  * @param {object} [args] - Fake browser arguments.
+ * @param {string[]} [args.elementLabels] - Element labels returned from all().
  * @param {string[]} [args.missingSelectors] - Selectors that should behave as absent.
  * @param {Record<string, string>} [args.textBySelector] - Selector-specific text values.
  * @returns {import("../src/system-testing-ui-session.js").BrowserSession} Fake browser session.
  */
-function fakeBrowser(calls, result, {missingSelectors = [], textBySelector = {}} = {}) {
+function fakeBrowser(calls, result, {elementLabels = [], missingSelectors = [], textBySelector = {}} = {}) {
   const missingSelectorSet = new Set(missingSelectors)
   const textResults = Array.isArray(result) ? result : [result]
   let textCallCount = 0
 
   return {
+    async all(selector, args) {
+      calls.push({args: [selector, args], method: "all"})
+
+      return elementLabels.map((label) => /** @type {import("selenium-webdriver").WebElement} */ ({
+        async getAttribute(attributeName) {
+          if (attributeName === "value") return label
+
+          return null
+        },
+        async getText() {
+          return label
+        }
+      }))
+    },
+
     async clearAndSendKeys(selector, value) {
       calls.push({args: [selector, value], method: "clearAndSendKeys"})
     },
 
-    async click(selector) {
-      calls.push({args: [selector], method: "click"})
-    },
-
-    async executeScript(script, ...args) {
-      calls.push({args: [script, ...args], method: "executeScript"})
-
-      return result
+    async click(elementOrSelector) {
+      calls.push({args: [typeof elementOrSelector === "string" ? elementOrSelector : await elementOrSelector.getText()], method: "click"})
     },
 
     async exists(selector, args) {
