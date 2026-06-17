@@ -1,5 +1,4 @@
 import {setTimeout as sleepMs} from "node:timers/promises"
-import {forcedBoolean, forcedNonBlankString, forcedString} from "typanic"
 import {Browser} from "system-testing/build/index.js"
 
 /**
@@ -13,9 +12,11 @@ import {Browser} from "system-testing/build/index.js"
  * @property {(selector: string, value: string) => Promise<void>} clearAndSendKeys - Replaces an input value through browser interactions.
  * @property {(selector: string) => Promise<void>} click - Clicks an element.
  * @property {(script: string, ...args: string[]) => Promise<unknown>} executeScript - Executes script in the browser.
+ * @property {(selector: string, args?: {timeout?: number, visible?: boolean | null}) => Promise<boolean>} exists - Checks whether an element exists.
  * @property {() => BrowserDriverAdapter} getDriverAdapter - Returns the browser driver adapter.
  * @property {(timeoutMs: number) => Promise<void>} setTimeouts - Sets browser timeouts.
  * @property {() => Promise<void>} stopDriver - Stops the browser driver.
+ * @property {(selector: string, args?: {timeout?: number, visible?: boolean | null}) => Promise<string>} text - Reads visible text from an element.
  * @property {(path: string) => Promise<void>} visit - Visits a URL or path.
  * @property {(selector: string, args?: {useBaseSelector?: boolean}) => Promise<void>} waitForNoSelector - Waits for an element to disappear.
  */
@@ -26,44 +27,6 @@ const DEFAULT_LOGIN_GONE_SELECTOR = "#Login-login, #loginBtn"
 const DEFAULT_PASSWORD_SELECTOR = ".maskPassword#userpassword"
 const DEFAULT_USERNAME_SELECTOR = "#username"
 const STATUS_LOAD_POLL_INTERVAL_MS = 250
-
-const LOGIN_CONTROLS_SCRIPT = String.raw`
-return Boolean(document.querySelector(arguments[0]) && document.querySelector(arguments[1]))
-`
-
-const READ_STATUS_SCRIPT = String.raw`
-const config = JSON.parse(arguments[0])
-const labels = config.labels || {}
-const selectors = config.selectors || {}
-const statusElement = selectors.statusText ? document.querySelector(selectors.statusText) : null
-const uptimeElement = selectors.uptimeText ? document.querySelector(selectors.uptimeText) : null
-const visibleText = (statusElement?.innerText || document.body?.innerText || '').trim()
-const uptimeText = (uptimeElement?.innerText || visibleText).trim()
-const normalizedText = visibleText.toLowerCase()
-const statusLoaded = !/\bModel Name\s*\n\s*Firmware Version\s*\n\s*System Uptime\b/i.test(visibleText)
-
-function includesAny(values) {
-  return Array.isArray(values) && values.some((value) => {
-    const specialChars = '\\.*+?^$(){}|[]'
-    const escapedValue = String(value).toLowerCase().split('').map((char) => specialChars.includes(char) ? '\\' + char : char).join('').replace(/\s+/g, '\\s+')
-    return new RegExp('(^|[^a-z0-9])' + escapedValue + '([^a-z0-9]|$)').test(normalizedText)
-  })
-}
-
-let connectionState = 'unknown'
-if (includesAny(labels.establishing)) connectionState = 'establishing'
-else if (includesAny(labels.down)) connectionState = 'down'
-else if (includesAny(labels.healthy)) connectionState = 'healthy'
-
-return {
-  connectionState,
-  loginSucceeded: !/login failed|invalid password|incorrect password/i.test(visibleText),
-  statusLoaded,
-  uiReachable: true,
-  uptimeText,
-  visibleText
-}
-`
 
 const REBOOT_SCRIPT = String.raw`
 const config = JSON.parse(arguments[0])
@@ -108,9 +71,10 @@ export default class SystemTestingUiSession {
     return await this.withBrowser(config, async (browser) => {
       await browser.visit("/")
       await this.login({browser, config})
-      const statusResult = await this.loadedStatusResult({browser, config})
+      const visibleText = await this.loadedStatusText({browser, config})
+      const uptimeText = await this.statusUptimeText({browser, config, visibleText})
 
-      return SystemTestingUiSession.statusFromResult(statusResult)
+      return SystemTestingUiSession.statusFromText({config, uptimeText, visibleText})
     })
   }
 
@@ -160,7 +124,7 @@ export default class SystemTestingUiSession {
     const passwordSelector = config.selectors.passwordInput ?? DEFAULT_PASSWORD_SELECTOR
     const loginButtonSelector = config.selectors.loginButton ?? DEFAULT_LOGIN_BUTTON_SELECTOR
     const loginGoneSelector = config.selectors.loginButton ?? DEFAULT_LOGIN_GONE_SELECTOR
-    const loginControlsPresent = forcedBoolean(await browser.executeScript(LOGIN_CONTROLS_SCRIPT, usernameSelector, passwordSelector), "login controls present")
+    const loginControlsPresent = await browser.exists(usernameSelector, {timeout: 0}) && await browser.exists(passwordSelector, {timeout: 0})
 
     if (!loginControlsPresent) {
       return
@@ -176,17 +140,17 @@ export default class SystemTestingUiSession {
    * @param {object} args - Status loading arguments.
    * @param {BrowserSession} args.browser - Browser session.
    * @param {import("./config.js").default} args.config - Watchdog config.
-   * @returns {Promise<unknown>} Hydrated browser status result.
+   * @returns {Promise<string>} Hydrated status text.
    */
-  async loadedStatusResult({browser, config}) {
+  async loadedStatusText({browser, config}) {
     const statusPollIntervalMs = Math.max(1, this.statusPollIntervalMs)
     const maxAttempts = Math.max(1, Math.ceil(this.timeoutMs / statusPollIntervalMs))
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const statusResult = await this.executeScript({browser, config, script: READ_STATUS_SCRIPT})
+      const visibleText = await this.statusVisibleText({browser, config})
 
-      if (SystemTestingUiSession.statusLoadedFromResult(statusResult)) {
-        return statusResult
+      if (SystemTestingUiSession.statusLoadedFromText(visibleText)) {
+        return visibleText
       }
 
       if (attempt < maxAttempts) {
@@ -195,6 +159,55 @@ export default class SystemTestingUiSession {
     }
 
     throw new Error("Timed out waiting for gateway status content to load")
+  }
+
+  /**
+   * @param {object} args - Status text arguments.
+   * @param {BrowserSession} args.browser - Browser session.
+   * @param {import("./config.js").default} args.config - Watchdog config.
+   * @returns {Promise<string>} Visible status text.
+   */
+  async statusVisibleText({browser, config}) {
+    const selectedText = await this.optionalElementText({browser, selector: config.selectors.statusText})
+
+    if (selectedText) return selectedText
+
+    return (await browser.text("body")).trim()
+  }
+
+  /**
+   * @param {object} args - Uptime text arguments.
+   * @param {BrowserSession} args.browser - Browser session.
+   * @param {import("./config.js").default} args.config - Watchdog config.
+   * @param {string} args.visibleText - Fallback visible status text.
+   * @returns {Promise<string>} Uptime text.
+   */
+  async statusUptimeText({browser, config, visibleText}) {
+    const selectedText = await this.optionalElementText({browser, selector: config.selectors.uptimeText})
+
+    if (selectedText) return selectedText
+
+    return visibleText
+  }
+
+  /**
+   * @param {object} args - Optional text arguments.
+   * @param {BrowserSession} args.browser - Browser session.
+   * @param {string | null} args.selector - Optional selector.
+   * @returns {Promise<string | null>} Trimmed element text, or null when absent/empty.
+   */
+  async optionalElementText({browser, selector}) {
+    if (!selector) return null
+
+    const elementExists = await browser.exists(selector, {timeout: 0, visible: null})
+
+    if (!elementExists) return null
+
+    const text = (await browser.text(selector, {timeout: 0, visible: null})).trim()
+
+    if (text.length === 0) return null
+
+    return text
   }
 
   /**
@@ -214,38 +227,63 @@ export default class SystemTestingUiSession {
    */
   static browserConfigJson(config) {
     return JSON.stringify({
-      labels: config.labels,
-      password: config.password,
-      selectors: config.selectors,
-      uiUrl: config.uiUrl,
-      username: config.username
+      selectors: config.selectors
     })
   }
 
   /**
-   * @param {unknown} rawStatus - Browser status result.
+   * @param {object} args - Status text arguments.
+   * @param {import("./config.js").default} args.config - Watchdog config.
+   * @param {string} args.uptimeText - Text used for uptime parsing.
+   * @param {string} args.visibleText - Text used for status classification.
    * @returns {import("./watchdog.js").GatewayUiStatus} Validated status.
    */
-  static statusFromResult(rawStatus) {
-    const result = SystemTestingUiSession.requiredPlainObject(rawStatus, "browser status result")
-
+  static statusFromText({config, uptimeText, visibleText}) {
     return {
-      connectionState: SystemTestingUiSession.connectionState(result.connectionState),
-      loginSucceeded: forcedBoolean(result.loginSucceeded, "gateway status loginSucceeded"),
-      uiReachable: forcedBoolean(result.uiReachable, "gateway status uiReachable"),
-      uptimeMs: SystemTestingUiSession.uptimeMsFromText(forcedString(result.uptimeText, "gateway status uptimeText")),
-      visibleText: forcedString(result.visibleText, "gateway status visibleText")
+      connectionState: SystemTestingUiSession.connectionStateFromText({config, visibleText}),
+      loginSucceeded: !/login failed|invalid password|incorrect password/i.test(visibleText),
+      uiReachable: true,
+      uptimeMs: SystemTestingUiSession.uptimeMsFromText(uptimeText),
+      visibleText
     }
   }
 
   /**
-   * @param {unknown} rawStatus - Browser status result.
+   * @param {string} visibleText - Visible router UI text.
    * @returns {boolean} Whether status content has finished loading.
    */
-  static statusLoadedFromResult(rawStatus) {
-    const result = SystemTestingUiSession.requiredPlainObject(rawStatus, "browser status result")
+  static statusLoadedFromText(visibleText) {
+    return !/\bModel Name\s*\n\s*Firmware Version\s*\n\s*System Uptime\b/i.test(visibleText)
+  }
 
-    return forcedBoolean(result.statusLoaded, "gateway status loaded")
+  /**
+   * @param {object} args - Connection state classification arguments.
+   * @param {import("./config.js").default} args.config - Watchdog config.
+   * @param {string} args.visibleText - Visible router UI text.
+   * @returns {import("./watchdog.js").GatewayConnectionState} Connection state.
+   */
+  static connectionStateFromText({config, visibleText}) {
+    const normalizedText = visibleText.toLowerCase()
+
+    if (SystemTestingUiSession.visibleTextContains(normalizedText, config.labels.establishing)) return "establishing"
+    if (SystemTestingUiSession.visibleTextContains(normalizedText, config.labels.down)) return "down"
+    if (SystemTestingUiSession.visibleTextContains(normalizedText, config.labels.healthy)) return "healthy"
+
+    return "unknown"
+  }
+
+  /**
+   * @param {string} normalizedText - Lowercase visible router UI text.
+   * @param {string[]} labels - Labels to match.
+   * @returns {boolean} Whether visible text contains a label.
+   */
+  static visibleTextContains(normalizedText, labels) {
+    return labels.some((label) => {
+      const normalizedLabel = label.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")
+      const labelPattern = new RegExp(`(^|[^a-z0-9])${normalizedLabel}([^a-z0-9]|$)`)
+
+      return labelPattern.test(normalizedText)
+    })
   }
 
   /**
@@ -282,20 +320,6 @@ export default class SystemTestingUiSession {
     }
 
     return matchedAnyUnit ? totalMs : null
-  }
-
-  /**
-   * @param {unknown} rawState - Raw connection state.
-   * @returns {import("./watchdog.js").GatewayConnectionState} Validated connection state.
-   */
-  static connectionState(rawState) {
-    const connectionState = forcedNonBlankString(rawState, "gateway status connectionState")
-
-    if (["down", "establishing", "healthy", "unknown"].includes(connectionState)) {
-      return /** @type {import("./watchdog.js").GatewayConnectionState} */ (connectionState)
-    }
-
-    throw new Error(`Unknown gateway connection state: ${connectionState}`)
   }
 
   /**

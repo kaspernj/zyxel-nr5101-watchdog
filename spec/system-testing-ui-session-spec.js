@@ -9,15 +9,7 @@ describe("SystemTestingUiSession", () => {
     /** @type {BrowserCall[]} */
     const calls = []
     const session = new SystemTestingUiSession({
-      browserFactory: () => fakeBrowser(calls, {
-        connectionState: "healthy",
-        loginSucceeded: true,
-        statusLoaded: true,
-        uiReachable: true,
-        uptimeMs: 3_600_000,
-        uptimeText: "0 days 1 hours 0 mins 0 secs",
-        visibleText: "Connected"
-      })
+      browserFactory: () => fakeBrowser(calls, "System Uptime\n0 days 1 hours 0 mins 0 secs\nCellular WAN\nStatus\nConnected")
     })
 
     const status = await session.readStatus(testConfig())
@@ -28,21 +20,22 @@ describe("SystemTestingUiSession", () => {
       "start",
       "setTimeouts",
       "visit",
-      "executeScript",
+      "exists",
+      "exists",
       "clearAndSendKeys",
       "clearAndSendKeys",
       "click",
       "waitForNoSelector",
-      "executeScript",
+      "text",
       "stopDriver"
     ])
     expect(calls[0].args).toEqual(["http://192.168.86.3"])
     expect(calls[3].args).toEqual(["/"])
-    expect(calls[5].args[0]).toContain("#username")
-    expect(calls[5].args[1]).toEqual("admin")
-    expect(calls[6].args[0]).toContain("#userpassword")
-    expect(calls[6].args[1]).toEqual("secret-password")
-    expect(calls[7].args[0]).toContain("#loginBtn")
+    expect(calls[6].args[0]).toContain("#username")
+    expect(calls[6].args[1]).toEqual("admin")
+    expect(calls[7].args[0]).toContain("#userpassword")
+    expect(calls[7].args[1]).toEqual("secret-password")
+    expect(calls[8].args[0]).toContain("#loginBtn")
   })
 
   it("uses the system-testing Browser package API to request a UI reboot", async () => {
@@ -58,7 +51,8 @@ describe("SystemTestingUiSession", () => {
       "start",
       "setTimeouts",
       "visit",
-      "executeScript",
+      "exists",
+      "exists",
       "clearAndSendKeys",
       "clearAndSendKeys",
       "click",
@@ -66,14 +60,12 @@ describe("SystemTestingUiSession", () => {
       "executeScript",
       "stopDriver"
     ])
-    expect(calls[9].args[0]).toContain("rebootButton")
+    expect(calls[10].args[0]).toContain("rebootButton")
   })
 
   it("parses zero-valued NR5101 uptime text as zero milliseconds", () => {
-    const status = SystemTestingUiSession.statusFromResult({
-      connectionState: "down",
-      loginSucceeded: true,
-      uiReachable: true,
+    const status = SystemTestingUiSession.statusFromText({
+      config: testConfig(),
       uptimeText: "0 days 0 hours 0 mins 0 secs",
       visibleText: "Connection down"
     })
@@ -81,27 +73,41 @@ describe("SystemTestingUiSession", () => {
     expect(status.uptimeMs).toEqual(0)
   })
 
+  it("falls back to body text when a configured status selector is missing", async () => {
+    /** @type {BrowserCall[]} */
+    const calls = []
+    const session = new SystemTestingUiSession({
+      browserFactory: () => fakeBrowser(calls, "System Uptime\n0 days 1 hours 0 mins 0 secs\nCellular WAN\nStatus\nConnected", {missingSelectors: ["#status"]})
+    })
+
+    const status = await session.readStatus(testConfig({selectors: {statusText: "#status"}}))
+
+    expect(status.connectionState).toEqual("healthy")
+    expect(calls.some((call) => call.method === "text" && call.args[0] === "body")).toEqual(true)
+  })
+
+  it("falls back to visible status text when a configured uptime selector is empty", async () => {
+    /** @type {BrowserCall[]} */
+    const calls = []
+    const session = new SystemTestingUiSession({
+      browserFactory: () => fakeBrowser(calls, "System Uptime\n0 days 2 hours 5 mins 15 secs\nCellular WAN\nStatus\nConnected", {
+        textBySelector: {"#uptime": "   "}
+      })
+    })
+
+    const status = await session.readStatus(testConfig({selectors: {uptimeText: "#uptime"}}))
+
+    expect(status.connectionState).toEqual("healthy")
+    expect(status.uptimeMs).toEqual(7_515_000)
+  })
+
   it("waits for the NR5101 dashboard to hydrate before reading status", async () => {
     /** @type {BrowserCall[]} */
     const calls = []
     const session = new SystemTestingUiSession({
       browserFactory: () => fakeBrowser(calls, [
-        {
-          connectionState: "down",
-          loginSucceeded: true,
-          statusLoaded: false,
-          uiReachable: true,
-          uptimeText: "0 days 0 hours 0 mins 0 secs",
-          visibleText: "System Info\nModel Name\nFirmware Version\nSystem Uptime\n0 days 0 hours 0 mins 0 secs\nWAN Status\nConnection down"
-        },
-        {
-          connectionState: "healthy",
-          loginSucceeded: true,
-          statusLoaded: true,
-          uiReachable: true,
-          uptimeText: "0 days 2 hours 5 mins 15 secs",
-          visibleText: "System Info\nModel Name\nNR5101\nFirmware Version\nV1.00(ABVC.8)C0\nSystem Uptime\n0 days 2 hours 5 mins 15 secs\nCellular WAN\nStatus\nUp"
-        }
+        "System Info\nModel Name\nFirmware Version\nSystem Uptime\n0 days 0 hours 0 mins 0 secs\nWAN Status\nConnection down",
+        "System Info\nModel Name\nNR5101\nFirmware Version\nV1.00(ABVC.8)C0\nSystem Uptime\n0 days 2 hours 5 mins 15 secs\nCellular WAN\nStatus\nUp"
       ]),
       sleep: async () => {}
     })
@@ -110,19 +116,22 @@ describe("SystemTestingUiSession", () => {
 
     expect(status.connectionState).toEqual("healthy")
     expect(status.uptimeMs).toEqual(7_515_000)
-    expect(calls.filter((call) => call.method === "executeScript").length).toEqual(3)
+    expect(calls.filter((call) => call.method === "text").length).toEqual(2)
   })
 })
 
 /**
  * @param {BrowserCall[]} calls - Captured browser calls.
- * @param {Record<string, unknown> | Record<string, unknown>[]} scriptResult - Result returned from executeScript.
+ * @param {Record<string, unknown> | string | string[]} result - Result returned from executeScript or text.
+ * @param {object} [args] - Fake browser arguments.
+ * @param {string[]} [args.missingSelectors] - Selectors that should behave as absent.
+ * @param {Record<string, string>} [args.textBySelector] - Selector-specific text values.
  * @returns {import("../src/system-testing-ui-session.js").BrowserSession} Fake browser session.
  */
-function fakeBrowser(calls, scriptResult) {
-  let executeScriptCount = 0
-  let statusScriptCount = 0
-  const scriptResults = Array.isArray(scriptResult) ? scriptResult : [scriptResult]
+function fakeBrowser(calls, result, {missingSelectors = [], textBySelector = {}} = {}) {
+  const missingSelectorSet = new Set(missingSelectors)
+  const textResults = Array.isArray(result) ? result : [result]
+  let textCallCount = 0
 
   return {
     async clearAndSendKeys(selector, value) {
@@ -134,17 +143,15 @@ function fakeBrowser(calls, scriptResult) {
     },
 
     async executeScript(script, ...args) {
-      executeScriptCount += 1
       calls.push({args: [script, ...args], method: "executeScript"})
 
-      if (executeScriptCount === 1) {
-        return true
-      }
-
-      const result = scriptResults[Math.min(statusScriptCount, scriptResults.length - 1)]
-      statusScriptCount += 1
-
       return result
+    },
+
+    async exists(selector, args) {
+      calls.push({args: [selector, args], method: "exists"})
+
+      return !missingSelectorSet.has(selector)
     },
 
     getDriverAdapter() {
@@ -167,6 +174,22 @@ function fakeBrowser(calls, scriptResult) {
       calls.push({args: [], method: "stopDriver"})
     },
 
+    async text(selector, args) {
+      calls.push({args: [selector, args], method: "text"})
+      if (missingSelectorSet.has(selector)) {
+        throw new Error(`Element couldn't be found by CSS: ${selector}`)
+      }
+
+      if (Object.prototype.hasOwnProperty.call(textBySelector, selector)) {
+        return textBySelector[selector]
+      }
+
+      const textResult = textResults[Math.min(textCallCount, textResults.length - 1)]
+      textCallCount += 1
+
+      return String(textResult)
+    },
+
     async waitForNoSelector(selector) {
       calls.push({args: [selector], method: "waitForNoSelector"})
     },
@@ -177,9 +200,10 @@ function fakeBrowser(calls, scriptResult) {
   }
 }
 
-function testConfig() {
+function testConfig(args = {}) {
   return Config.fromObject({
     password: "secret-password",
+    ...args,
     uiUrl: "http://192.168.86.3",
     username: "admin"
   }, {source: "spec"})

@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "system-testing": "^1.0.111",
+    "system-testing": "^1.0.112",
     "typanic": "^1.0.4"
   },
   "devDependencies": {
