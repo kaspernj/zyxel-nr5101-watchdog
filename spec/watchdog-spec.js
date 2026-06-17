@@ -11,6 +11,7 @@ describe("Watchdog", () => {
       "boot_grace_period",
       "connection_down",
       "connection_establishing",
+      "connectivity_probe_failed",
       "healthy",
       "login_failed",
       "ui_unreachable",
@@ -23,6 +24,81 @@ describe("Watchdog", () => {
 
     expect(decision.healthReason).toEqual("healthy")
     expect(decision.shouldReboot).toEqual(false)
+  })
+
+  it("does not run the connectivity probe before the healthy uptime reaches the probe minimum", async () => {
+    let probeChecks = 0
+    const watchdog = new Watchdog({clock: () => 7_200_000})
+
+    const result = await watchdog.check({
+      config: configFromObject(),
+      connectivityProbe: {
+        async check() {
+          probeChecks += 1
+
+          return {error: "probe should not run yet", ok: false}
+        }
+      },
+      uiSession: {
+        async readStatus() {
+          return healthyStatus({uptimeMs: 299_999})
+        }
+      }
+    })
+
+    expect(probeChecks).toEqual(0)
+    expect(result.decision.healthReason).toEqual("healthy")
+    expect(result.decision.shouldReboot).toEqual(false)
+  })
+
+  it("allows reboot when the gateway reports healthy for at least five minutes but the connectivity probe fails", async () => {
+    let rebooted = false
+    const watchdog = new Watchdog({clock: () => 7_200_000})
+
+    const result = await watchdog.rebootIfNeeded({
+      config: configFromObject(),
+      connectivityProbe: {
+        async check() {
+          return {error: "ECONNREFUSED", ok: false}
+        }
+      },
+      uiSession: {
+        async readStatus() {
+          return healthyStatus({uptimeMs: 300_000})
+        },
+
+        async reboot() {
+          rebooted = true
+
+          return {ok: true}
+        }
+      }
+    })
+
+    expect(result.decision.healthReason).toEqual("connectivity_probe_failed")
+    expect(result.decision.shouldReboot).toEqual(true)
+    expect(rebooted).toEqual(true)
+  })
+
+  it("stays healthy when the gateway reports healthy and the connectivity probe succeeds", async () => {
+    const watchdog = new Watchdog({clock: () => 7_200_000})
+
+    const result = await watchdog.check({
+      config: configFromObject(),
+      connectivityProbe: {
+        async check() {
+          return {error: null, ok: true}
+        }
+      },
+      uiSession: {
+        async readStatus() {
+          return healthyStatus({uptimeMs: 300_000})
+        }
+      }
+    })
+
+    expect(result.decision.healthReason).toEqual("healthy")
+    expect(result.decision.shouldReboot).toEqual(false)
   })
 
   it("allows reboot when the connection is clearly down and cooldown has passed", () => {
@@ -96,11 +172,7 @@ describe("Watchdog", () => {
  * @returns {ReturnType<Watchdog["evaluate"]>} Watchdog decision.
  */
 function evaluateStatus(statusOverrides, options = {}) {
-  const config = Config.fromObject({
-    password: "secret-password",
-    uiUrl: "http://192.168.86.3",
-    username: "admin"
-  }, {source: "spec"})
+  const config = configFromObject()
   const watchdog = new Watchdog({clock: () => options.nowMs ?? 7_200_000})
 
   /** @type {GatewayUiStatus} */
@@ -118,4 +190,35 @@ function evaluateStatus(statusOverrides, options = {}) {
     state: {lastRebootAtMs: options.lastRebootAtMs ?? null},
     status
   })
+}
+
+/**
+ * @param {Record<string, unknown>} [overrides] - Config fields to override.
+ * @returns {Config} Watchdog config.
+ */
+function configFromObject(overrides = {}) {
+  return Config.fromObject({
+    password: "secret-password",
+    uiUrl: "http://192.168.86.3",
+    username: "admin",
+    ...overrides
+  }, {source: "spec"})
+}
+
+/**
+ * @param {Partial<GatewayUiStatus>} [overrides] - Status fields to override.
+ * @returns {GatewayUiStatus} Healthy gateway status.
+ */
+function healthyStatus(overrides = {}) {
+  /** @type {GatewayUiStatus} */
+  const status = {
+    connectionState: "healthy",
+    loginSucceeded: true,
+    uiReachable: true,
+    uptimeMs: 3_600_000,
+    visibleText: "Connected",
+    ...overrides
+  }
+
+  return status
 }
