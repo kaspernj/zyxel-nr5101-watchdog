@@ -69,6 +69,20 @@ describe("Watchdog", () => {
     expect(decision.shouldReboot).toEqual(true)
   })
 
+  it("classifies the NR5101 connection down label as down", () => {
+    const decision = evaluateStatus({connectionState: "unknown", uptimeMs: 3_600_000, visibleText: "Cellular WAN\nStatus\nConnection down"})
+
+    expect(decision.healthReason).toEqual("connection_down")
+    expect(decision.shouldReboot).toEqual(true)
+  })
+
+  it("classifies the NR5101 cellular WAN status up label as healthy", () => {
+    const decision = evaluateStatus({connectionState: "unknown", uptimeMs: 3_600_000, visibleText: "Cellular WAN\nStatus\nUp"})
+
+    expect(decision.healthReason).toEqual("healthy")
+    expect(decision.shouldReboot).toEqual(false)
+  })
+
   it("reports login failure, unreachable UI, and unknown status without rebooting", () => {
     expect(evaluateStatus({loginSucceeded: false}).healthReason).toEqual("login_failed")
     expect(evaluateStatus({uiReachable: false}).healthReason).toEqual("ui_unreachable")

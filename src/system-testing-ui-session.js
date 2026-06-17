@@ -1,4 +1,4 @@
-import {forcedBoolean, forcedNonBlankString, forcedString, optionalInteger} from "typanic"
+import {forcedBoolean, forcedNonBlankString, forcedString} from "typanic"
 import {Browser} from "system-testing/build/index.js"
 
 /**
@@ -9,44 +9,24 @@ import {Browser} from "system-testing/build/index.js"
 
 /**
  * @typedef {object} BrowserSession
+ * @property {(selector: string, value: string) => Promise<void>} clearAndSendKeys - Replaces an input value through browser interactions.
+ * @property {(selector: string) => Promise<void>} click - Clicks an element.
  * @property {(script: string, ...args: string[]) => Promise<unknown>} executeScript - Executes script in the browser.
  * @property {() => BrowserDriverAdapter} getDriverAdapter - Returns the browser driver adapter.
  * @property {(timeoutMs: number) => Promise<void>} setTimeouts - Sets browser timeouts.
  * @property {() => Promise<void>} stopDriver - Stops the browser driver.
  * @property {(path: string) => Promise<void>} visit - Visits a URL or path.
+ * @property {(selector: string, args?: {useBaseSelector?: boolean}) => Promise<void>} waitForNoSelector - Waits for an element to disappear.
  */
 
-const LOGIN_SCRIPT = String.raw`
-const config = JSON.parse(arguments[0])
-const selectors = config.selectors || {}
-const selector = (...candidates) => candidates.find((candidate) => candidate && document.querySelector(candidate))
-const usernameSelector = selector(selectors.usernameInput, 'input[name="username"]', 'input[id*="user" i]', 'input[type="text"]')
-const passwordSelector = selector(selectors.passwordInput, 'input[name="password"]', 'input[id*="password" i]', 'input[type="password"]')
-const loginButtonSelector = selector(selectors.loginButton, 'button[type="submit"]', 'input[type="submit"]')
-const usernameInput = usernameSelector ? document.querySelector(usernameSelector) : null
-const passwordInput = passwordSelector ? document.querySelector(passwordSelector) : null
+// NR5101 firmware defaults; local config selectors can override these when firmware markup differs.
+const DEFAULT_LOGIN_BUTTON_SELECTOR = "#loginBtn"
+const DEFAULT_LOGIN_GONE_SELECTOR = "#Login-login, #loginBtn"
+const DEFAULT_PASSWORD_SELECTOR = ".maskPassword#userpassword"
+const DEFAULT_USERNAME_SELECTOR = "#username"
 
-function setInputValue(input, value) {
-  input.focus()
-  input.value = value
-  input.dispatchEvent(new Event('input', {bubbles: true}))
-  input.dispatchEvent(new Event('change', {bubbles: true}))
-}
-
-if (!usernameInput || !passwordInput) {
-  return {loginAttempted: false, loginSucceeded: !/login failed|invalid password|incorrect password/i.test(document.body.innerText || '')}
-}
-
-setInputValue(usernameInput, config.username)
-setInputValue(passwordInput, config.password)
-
-if (loginButtonSelector) {
-  document.querySelector(loginButtonSelector).click()
-} else {
-  passwordInput.form?.requestSubmit()
-}
-
-return {loginAttempted: true, loginSucceeded: true}
+const LOGIN_CONTROLS_SCRIPT = String.raw`
+return Boolean(document.querySelector(arguments[0]) && document.querySelector(arguments[1]))
 `
 
 const READ_STATUS_SCRIPT = String.raw`
@@ -67,31 +47,6 @@ function includesAny(values) {
   })
 }
 
-function parseUptimeMs(text) {
-  if (!text) return null
-  const normalized = text.toLowerCase()
-  const colonMatch = normalized.match(/(\d+)\s*:\s*(\d+)\s*:\s*(\d+)/)
-  if (colonMatch) {
-    return ((Number(colonMatch[1]) * 60 * 60) + (Number(colonMatch[2]) * 60) + Number(colonMatch[3])) * 1000
-  }
-
-  let totalMs = 0
-  const units = [
-    [/([0-9]+)\s*d(?:ay)?s?/g, 24 * 60 * 60 * 1000],
-    [/([0-9]+)\s*h(?:our)?s?/g, 60 * 60 * 1000],
-    [/([0-9]+)\s*m(?:in(?:ute)?)?s?/g, 60 * 1000],
-    [/([0-9]+)\s*s(?:ec(?:ond)?)?s?/g, 1000]
-  ]
-
-  for (const [pattern, multiplier] of units) {
-    for (const match of normalized.matchAll(pattern)) {
-      totalMs += Number(match[1]) * multiplier
-    }
-  }
-
-  return totalMs > 0 ? totalMs : null
-}
-
 let connectionState = 'unknown'
 if (includesAny(labels.establishing)) connectionState = 'establishing'
 else if (includesAny(labels.down)) connectionState = 'down'
@@ -101,7 +56,7 @@ return {
   connectionState,
   loginSucceeded: !/login failed|invalid password|incorrect password/i.test(visibleText),
   uiReachable: true,
-  uptimeMs: parseUptimeMs(uptimeText),
+  uptimeText,
   visibleText
 }
 `
@@ -144,7 +99,7 @@ export default class SystemTestingUiSession {
   async readStatus(config) {
     return await this.withBrowser(config, async (browser) => {
       await browser.visit("/")
-      await this.executeScript({browser, config, script: LOGIN_SCRIPT})
+      await this.login({browser, config})
       const statusResult = await this.executeScript({browser, config, script: READ_STATUS_SCRIPT})
 
       return SystemTestingUiSession.statusFromResult(statusResult)
@@ -158,7 +113,7 @@ export default class SystemTestingUiSession {
   async reboot(config) {
     return await this.withBrowser(config, async (browser) => {
       await browser.visit("/")
-      await this.executeScript({browser, config, script: LOGIN_SCRIPT})
+      await this.login({browser, config})
 
       return SystemTestingUiSession.requiredPlainObject(await this.executeScript({browser, config, script: REBOOT_SCRIPT}), "browser reboot result")
     })
@@ -184,6 +139,29 @@ export default class SystemTestingUiSession {
     } finally {
       await browser.stopDriver()
     }
+  }
+
+  /**
+   * @param {object} args - Login arguments.
+   * @param {BrowserSession} args.browser - Browser session.
+   * @param {import("./config.js").default} args.config - Watchdog config.
+   * @returns {Promise<void>}
+   */
+  async login({browser, config}) {
+    const usernameSelector = config.selectors.usernameInput ?? DEFAULT_USERNAME_SELECTOR
+    const passwordSelector = config.selectors.passwordInput ?? DEFAULT_PASSWORD_SELECTOR
+    const loginButtonSelector = config.selectors.loginButton ?? DEFAULT_LOGIN_BUTTON_SELECTOR
+    const loginGoneSelector = config.selectors.loginButton ?? DEFAULT_LOGIN_GONE_SELECTOR
+    const loginControlsPresent = forcedBoolean(await browser.executeScript(LOGIN_CONTROLS_SCRIPT, usernameSelector, passwordSelector), "login controls present")
+
+    if (!loginControlsPresent) {
+      return
+    }
+
+    await browser.clearAndSendKeys(usernameSelector, config.username)
+    await browser.clearAndSendKeys(passwordSelector, config.password)
+    await browser.click(loginButtonSelector)
+    await browser.waitForNoSelector(loginGoneSelector)
   }
 
   /**
@@ -222,9 +200,45 @@ export default class SystemTestingUiSession {
       connectionState: SystemTestingUiSession.connectionState(result.connectionState),
       loginSucceeded: forcedBoolean(result.loginSucceeded, "gateway status loginSucceeded"),
       uiReachable: forcedBoolean(result.uiReachable, "gateway status uiReachable"),
-      uptimeMs: optionalInteger(result.uptimeMs, "gateway status uptimeMs"),
+      uptimeMs: SystemTestingUiSession.uptimeMsFromText(forcedString(result.uptimeText, "gateway status uptimeText")),
       visibleText: forcedString(result.visibleText, "gateway status visibleText")
     }
+  }
+
+  /**
+   * @param {string} text - Gateway uptime text.
+   * @returns {number | null} Parsed uptime in milliseconds, or null when no uptime is present.
+   */
+  static uptimeMsFromText(text) {
+    if (!text) {
+      return null
+    }
+
+    const normalized = text.toLowerCase()
+    const colonMatch = normalized.match(/(\d+)\s*:\s*(\d+)\s*:\s*(\d+)/)
+
+    if (colonMatch) {
+      return ((Number(colonMatch[1]) * 60 * 60) + (Number(colonMatch[2]) * 60) + Number(colonMatch[3])) * 1000
+    }
+
+    let matchedAnyUnit = false
+    let totalMs = 0
+    /** @type {[RegExp, number][]} */
+    const units = [
+      [/([0-9]+)\s*d(?:ay)?s?/g, 24 * 60 * 60 * 1000],
+      [/([0-9]+)\s*h(?:our)?s?/g, 60 * 60 * 1000],
+      [/([0-9]+)\s*m(?:in(?:ute)?)?s?/g, 60 * 1000],
+      [/([0-9]+)\s*s(?:ec(?:ond)?)?s?/g, 1000]
+    ]
+
+    for (const [pattern, multiplier] of units) {
+      for (const match of normalized.matchAll(pattern)) {
+        matchedAnyUnit = true
+        totalMs += Number(match[1]) * multiplier
+      }
+    }
+
+    return matchedAnyUnit ? totalMs : null
   }
 
   /**

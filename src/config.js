@@ -4,9 +4,9 @@ import {forcedNonBlankString, optionalNonBlankString, optionalPositiveInteger} f
 export const DEFAULT_CONFIG_PATH = "config/secrets.json"
 
 const DEFAULT_LABELS = Object.freeze({
-  down: Object.freeze(["disconnected", "no internet", "connection failed", "not connected"]),
+  down: Object.freeze(["disconnected", "no internet", "connection failed", "not connected", "connection down"]),
   establishing: Object.freeze(["connecting", "establishing", "booting", "initializing", "registering"]),
-  healthy: Object.freeze(["connected", "online", "internet connected"])
+  healthy: Object.freeze(["connected", "online", "internet connected", "up"])
 })
 
 const DEFAULT_STATE_PATH = "var/state.json"

@@ -14,6 +14,7 @@ describe("SystemTestingUiSession", () => {
         loginSucceeded: true,
         uiReachable: true,
         uptimeMs: 3_600_000,
+        uptimeText: "0 days 1 hours 0 mins 0 secs",
         visibleText: "Connected"
       })
     })
@@ -27,11 +28,20 @@ describe("SystemTestingUiSession", () => {
       "setTimeouts",
       "visit",
       "executeScript",
+      "clearAndSendKeys",
+      "clearAndSendKeys",
+      "click",
+      "waitForNoSelector",
       "executeScript",
       "stopDriver"
     ])
     expect(calls[0].args).toEqual(["http://192.168.86.3"])
     expect(calls[3].args).toEqual(["/"])
+    expect(calls[5].args[0]).toContain("#username")
+    expect(calls[5].args[1]).toEqual("admin")
+    expect(calls[6].args[0]).toContain("#userpassword")
+    expect(calls[6].args[1]).toEqual("secret-password")
+    expect(calls[7].args[0]).toContain("#loginBtn")
   })
 
   it("uses the system-testing Browser package API to request a UI reboot", async () => {
@@ -48,10 +58,26 @@ describe("SystemTestingUiSession", () => {
       "setTimeouts",
       "visit",
       "executeScript",
+      "clearAndSendKeys",
+      "clearAndSendKeys",
+      "click",
+      "waitForNoSelector",
       "executeScript",
       "stopDriver"
     ])
-    expect(calls[5].args[0]).toContain("rebootButton")
+    expect(calls[9].args[0]).toContain("rebootButton")
+  })
+
+  it("parses zero-valued NR5101 uptime text as zero milliseconds", () => {
+    const status = SystemTestingUiSession.statusFromResult({
+      connectionState: "down",
+      loginSucceeded: true,
+      uiReachable: true,
+      uptimeText: "0 days 0 hours 0 mins 0 secs",
+      visibleText: "Connection down"
+    })
+
+    expect(status.uptimeMs).toEqual(0)
   })
 })
 
@@ -61,9 +87,24 @@ describe("SystemTestingUiSession", () => {
  * @returns {import("../src/system-testing-ui-session.js").BrowserSession} Fake browser session.
  */
 function fakeBrowser(calls, scriptResult) {
+  let executeScriptCount = 0
+
   return {
+    async clearAndSendKeys(selector, value) {
+      calls.push({args: [selector, value], method: "clearAndSendKeys"})
+    },
+
+    async click(selector) {
+      calls.push({args: [selector], method: "click"})
+    },
+
     async executeScript(script, ...args) {
+      executeScriptCount += 1
       calls.push({args: [script, ...args], method: "executeScript"})
+
+      if (executeScriptCount === 1) {
+        return true
+      }
 
       return scriptResult
     },
@@ -88,6 +129,10 @@ function fakeBrowser(calls, scriptResult) {
       calls.push({args: [], method: "stopDriver"})
     },
 
+    async waitForNoSelector(selector) {
+      calls.push({args: [selector], method: "waitForNoSelector"})
+    },
+
     async visit(path) {
       calls.push({args: [path], method: "visit"})
     }
@@ -97,12 +142,6 @@ function fakeBrowser(calls, scriptResult) {
 function testConfig() {
   return Config.fromObject({
     password: "secret-password",
-    selectors: {
-      loginButton: "#login",
-      passwordInput: "#password",
-      rebootButton: "#reboot",
-      usernameInput: "#username"
-    },
     uiUrl: "http://192.168.86.3",
     username: "admin"
   }, {source: "spec"})
