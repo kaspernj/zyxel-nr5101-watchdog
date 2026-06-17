@@ -1,6 +1,6 @@
 {
   "name": "zyxel-nr5101-watchdog",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Watchdog for Zyxel NR5101 gateway connectivity and safe UI reboots",
   "type": "module",
   "bin": {
