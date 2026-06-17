@@ -1,7 +1,0 @@
-node_modules/
-coverage/
-build/
-var/
-config/secrets.json
-OPENCODE_RESUME.md
-*.log
