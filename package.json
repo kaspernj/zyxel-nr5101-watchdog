@@ -12,7 +12,7 @@
     "fallow": "fallow dead-code --baseline fallow-baselines/dead-code.json --fail-on-issues --quiet && fallow dupes --baseline fallow-baselines/dupes.json --fail-on-issues --quiet && fallow health --baseline fallow-baselines/health.json --report-only --quiet",
     "fallow:baseline": "fallow dead-code --save-baseline fallow-baselines/dead-code.json && fallow dupes --save-baseline fallow-baselines/dupes.json && fallow health --save-baseline fallow-baselines/health.json",
     "lint": "npm run eslint && npm run typecheck && npm run fallow",
-    "release:patch": "node scripts/release-patch.js",
+    "release:patch": "release-patch",
     "test": "npx velocious test -- spec",
     "typecheck": "tsc --noEmit"
   },
@@ -30,6 +30,7 @@
     "eslint-plugin-jsdoc": "^63.0.2",
     "fallow": "^2.92.1",
     "globals": "^17.6.0",
+    "release-patch": "^1.0.1",
     "typescript": "^6.0.3",
     "velocious": "^1.0.456"
   },
