@@ -1,6 +1,7 @@
 import Config, {DEFAULT_CONFIG_PATH} from "./config.js"
 import StateStore from "./state-store.js"
 import SystemTestingUiSession from "./system-testing-ui-session.js"
+import TcpConnectivityProbe from "./tcp-connectivity-probe.js"
 import Watchdog from "./watchdog.js"
 
 /**
@@ -13,6 +14,7 @@ import Watchdog from "./watchdog.js"
  * @property {{load: () => Promise<{lastRebootAtMs: number | null}>, save: (state: {lastRebootAtMs: number | null}) => Promise<void>}} activeStateStore - State store.
  * @property {() => number} clock - Clock returning epoch milliseconds.
  * @property {Config} config - Watchdog config.
+ * @property {import("./watchdog.js").ConnectivityProbe} connectivityProbe - Outbound connectivity probe.
  * @property {number | undefined} maxIterations - Maximum watch iterations.
  * @property {(ms: number) => Promise<void>} sleep - Sleep function.
  * @property {CliStreams} stdout - Output stream.
@@ -39,6 +41,7 @@ export async function main(argv = process.argv.slice(2)) {
  * @param {object} [args] - Runtime arguments.
  * @param {string[]} [args.argv] - CLI arguments.
  * @param {() => number} [args.clock] - Clock returning epoch milliseconds.
+ * @param {import("./watchdog.js").ConnectivityProbe} [args.connectivityProbe] - Outbound connectivity probe.
  * @param {number} [args.maxIterations] - Maximum watch iterations, mainly for tests.
  * @param {(ms: number) => Promise<void>} [args.sleep] - Sleep function, mainly for tests.
  * @param {{load: () => Promise<{lastRebootAtMs: number | null}>, save: (state: {lastRebootAtMs: number | null}) => Promise<void>}} [args.stateStore] - State store.
@@ -46,7 +49,7 @@ export async function main(argv = process.argv.slice(2)) {
  * @param {{readStatus: (config: Config) => Promise<import("./watchdog.js").GatewayUiStatus>, reboot?: (config: Config) => Promise<Record<string, unknown>>}} [args.uiSession] - UI session.
  * @returns {Promise<number>} Process exit code.
  */
-export async function runCli({argv = process.argv.slice(2), clock = () => Date.now(), maxIterations, sleep = sleepMs, stateStore, stdout = process.stdout, uiSession = new SystemTestingUiSession()} = {}) {
+export async function runCli({argv = process.argv.slice(2), clock = () => Date.now(), connectivityProbe = new TcpConnectivityProbe(), maxIterations, sleep = sleepMs, stateStore, stdout = process.stdout, uiSession = new SystemTestingUiSession()} = {}) {
   const {command, configPath} = parseCliArgs(argv)
   const commandHandler = commandHandlerFor(command)
 
@@ -60,16 +63,16 @@ export async function runCli({argv = process.argv.slice(2), clock = () => Date.n
   const activeStateStore = stateStore ?? new StateStore({statePath: config.statePath})
   const watchdog = new Watchdog({clock})
 
-  return await commandHandler({activeStateStore, clock, config, maxIterations, sleep, stdout, uiSession, watchdog})
+  return await commandHandler({activeStateStore, clock, config, connectivityProbe, maxIterations, sleep, stdout, uiSession, watchdog})
 }
 
 /**
  * @param {CliRuntime} runtime - CLI runtime collaborators.
  * @returns {Promise<number>} Process exit code.
  */
-async function runCheckCommand({activeStateStore, config, stdout, uiSession, watchdog}) {
+async function runCheckCommand({activeStateStore, config, connectivityProbe, stdout, uiSession, watchdog}) {
   const state = await activeStateStore.load()
-  const {decision} = await watchdog.check({config, state, uiSession})
+  const {decision} = await watchdog.check({config, connectivityProbe, state, uiSession})
 
   writeJsonLine(stdout, {command: "check", decision})
 
@@ -80,9 +83,9 @@ async function runCheckCommand({activeStateStore, config, stdout, uiSession, wat
  * @param {CliRuntime} runtime - CLI runtime collaborators.
  * @returns {Promise<number>} Process exit code.
  */
-async function runRebootCommand({activeStateStore, clock, config, stdout, uiSession, watchdog}) {
+async function runRebootCommand({activeStateStore, clock, config, connectivityProbe, stdout, uiSession, watchdog}) {
   const state = await activeStateStore.load()
-  const result = await watchdog.rebootIfNeeded({config, state, uiSession: requiredRebootSession(uiSession)})
+  const result = await watchdog.rebootIfNeeded({config, connectivityProbe, state, uiSession: requiredRebootSession(uiSession)})
 
   await saveRebootStateIfSuccessful({activeStateStore, clock, rebootResult: result.rebootResult})
   writeJsonLine(stdout, {command: "reboot", decision: result.decision, rebootResult: result.rebootResult})
@@ -94,8 +97,8 @@ async function runRebootCommand({activeStateStore, clock, config, stdout, uiSess
  * @param {CliRuntime} runtime - CLI runtime collaborators.
  * @returns {Promise<number>} Process exit code.
  */
-async function runWatchCommand({activeStateStore, clock, config, maxIterations, sleep, stdout, uiSession, watchdog}) {
-  await runWatchLoop({activeStateStore, clock, config, maxIterations, sleep, stdout, uiSession: requiredRebootSession(uiSession), watchdog})
+async function runWatchCommand({activeStateStore, clock, config, connectivityProbe, maxIterations, sleep, stdout, uiSession, watchdog}) {
+  await runWatchLoop({activeStateStore, clock, config, connectivityProbe, maxIterations, sleep, stdout, uiSession: requiredRebootSession(uiSession), watchdog})
 
   return 0
 }
@@ -105,6 +108,7 @@ async function runWatchCommand({activeStateStore, clock, config, maxIterations, 
  * @param {{load: () => Promise<{lastRebootAtMs: number | null}>, save: (state: {lastRebootAtMs: number | null}) => Promise<void>}} args.activeStateStore - State store.
  * @param {() => number} args.clock - Clock returning epoch milliseconds.
  * @param {Config} args.config - Watchdog config.
+ * @param {import("./watchdog.js").ConnectivityProbe} args.connectivityProbe - Outbound connectivity probe.
  * @param {number} [args.maxIterations] - Maximum iterations.
  * @param {(ms: number) => Promise<void>} args.sleep - Sleep function.
  * @param {CliStreams} args.stdout - Output stream.
@@ -112,13 +116,13 @@ async function runWatchCommand({activeStateStore, clock, config, maxIterations, 
  * @param {Watchdog} args.watchdog - Watchdog instance.
  * @returns {Promise<void>}
  */
-async function runWatchLoop({activeStateStore, clock, config, maxIterations, sleep, stdout, uiSession, watchdog}) {
+async function runWatchLoop({activeStateStore, clock, config, connectivityProbe, maxIterations, sleep, stdout, uiSession, watchdog}) {
   let iterations = 0
   const watchUiSession = watchLoopUiSession(uiSession)
 
   while (true) {
     const state = await activeStateStore.load()
-    const result = await watchdog.rebootIfNeeded({config, state, uiSession: watchUiSession})
+    const result = await watchdog.rebootIfNeeded({config, connectivityProbe, state, uiSession: watchUiSession})
 
     await saveRebootStateIfSuccessful({activeStateStore, clock, rebootResult: result.rebootResult})
     writeJsonLine(stdout, {command: "watch", decision: result.decision, rebootResult: result.rebootResult})

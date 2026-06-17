@@ -21,6 +21,10 @@ describe("Config", () => {
       expect(config.checkIntervalMs).toEqual(300_000)
       expect(config.rebootCooldownMs).toEqual(3_600_000)
       expect(config.bootGracePeriodMs).toEqual(600_000)
+      expect(config.connectivityProbeHost).toEqual("1.1.1.1")
+      expect(config.connectivityProbeMinimumUptimeMs).toEqual(300_000)
+      expect(config.connectivityProbePort).toEqual(443)
+      expect(config.connectivityProbeTimeoutMs).toEqual(5_000)
       expect(config.minimumUptimeBeforeRebootMs).toEqual(null)
       expect(config.statePath).toEqual("var/state.json")
       expect(config.labels.healthy).toContain("connected")
@@ -33,6 +37,10 @@ describe("Config", () => {
     await withTempConfig({
       bootGracePeriodMs: 120_000,
       checkIntervalMs: 60_000,
+      connectivityProbeHost: "9.9.9.9",
+      connectivityProbeMinimumUptimeMs: 420_000,
+      connectivityProbePort: 8443,
+      connectivityProbeTimeoutMs: 2_500,
       labels: {
         down: ["No internet access"],
         establishing: ["Registering"],
@@ -56,6 +64,10 @@ describe("Config", () => {
       expect(config.checkIntervalMs).toEqual(60_000)
       expect(config.rebootCooldownMs).toEqual(1_800_000)
       expect(config.bootGracePeriodMs).toEqual(120_000)
+      expect(config.connectivityProbeHost).toEqual("9.9.9.9")
+      expect(config.connectivityProbeMinimumUptimeMs).toEqual(420_000)
+      expect(config.connectivityProbePort).toEqual(8443)
+      expect(config.connectivityProbeTimeoutMs).toEqual(2_500)
       expect(config.minimumUptimeBeforeRebootMs).toEqual(900_000)
       expect(config.statePath).toEqual("var/custom-state.json")
       expect(config.selectors.usernameInput).toEqual("#username")
@@ -71,6 +83,17 @@ describe("Config", () => {
       uiUrl: "http://192.168.86.3"
     }, async (configPath) => {
       await expect(() => Config.load({configPath})).toThrow(/username/)
+    })
+  })
+
+  it("throws when the connectivity probe port is outside the TCP port range", async () => {
+    await withTempConfig({
+      connectivityProbePort: 70_000,
+      password: "secret-password",
+      uiUrl: "http://192.168.86.3",
+      username: "admin"
+    }, async (configPath) => {
+      await expect(() => Config.load({configPath})).toThrow(/connectivityProbePort/)
     })
   })
 })

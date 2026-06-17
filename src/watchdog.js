@@ -1,5 +1,6 @@
 export const HEALTH_REASONS = Object.freeze({
   bootGracePeriod: "boot_grace_period",
+  connectivityProbeFailed: "connectivity_probe_failed",
   connectionDown: "connection_down",
   connectionEstablishing: "connection_establishing",
   healthy: "healthy",
@@ -32,6 +33,23 @@ const LABEL_HEALTH_REASONS = Object.freeze([
   {labelsKey: "healthy", reason: HEALTH_REASONS.healthy}
 ])
 
+/** @type {ReadonlySet<string>} */
+const REBOOTABLE_HEALTH_REASONS = new Set([
+  HEALTH_REASONS.connectivityProbeFailed,
+  HEALTH_REASONS.connectionDown
+])
+
+/**
+ * @typedef {object} ConnectivityProbeResult
+ * @property {string | null} error - Probe failure description, or null on success.
+ * @property {boolean} ok - Whether the outbound connectivity probe succeeded.
+ */
+
+/**
+ * @typedef {object} ConnectivityProbe
+ * @property {(config: import("./config.js").default) => Promise<ConnectivityProbeResult>} check - Runs the outbound connectivity check.
+ */
+
 /**
  * @typedef {object} GatewayUiStatus
  * @property {GatewayConnectionState} connectionState - Structured connection state from the UI adapter.
@@ -59,12 +77,13 @@ export default class Watchdog {
   /**
    * @param {object} args - Evaluation arguments.
    * @param {import("./config.js").default} args.config - Watchdog config.
+   * @param {ConnectivityProbeResult | null} [args.connectivityProbeResult] - Outbound probe result when checked.
    * @param {WatchdogState} [args.state] - Persisted watchdog state.
    * @param {GatewayUiStatus} args.status - Latest gateway UI status.
    * @returns {{healthReason: string, nextRebootAllowedAtMs: number | null, shouldReboot: boolean, skipReason: string | null}} Decision.
    */
-  evaluate({config, state = {}, status}) {
-    const healthReason = this.healthReason({config, status})
+  evaluate({config, connectivityProbeResult = null, state = {}, status}) {
+    const healthReason = this.healthReason({config, connectivityProbeResult, status})
     const decision = {
       healthReason,
       nextRebootAllowedAtMs: null,
@@ -72,7 +91,7 @@ export default class Watchdog {
       skipReason: null
     }
 
-    if (healthReason !== HEALTH_REASONS.connectionDown) {
+    if (!REBOOTABLE_HEALTH_REASONS.has(healthReason)) {
       return decision
     }
 
@@ -99,15 +118,17 @@ export default class Watchdog {
   /**
    * @param {object} args - Check arguments.
    * @param {import("./config.js").default} args.config - Watchdog config.
+   * @param {ConnectivityProbe} [args.connectivityProbe] - Outbound connectivity probe.
    * @param {WatchdogState} [args.state] - Persisted watchdog state.
    * @param {{readStatus: (config: import("./config.js").default) => Promise<GatewayUiStatus>}} args.uiSession - UI automation session.
    * @returns {Promise<{decision: ReturnType<Watchdog["evaluate"]>, status: GatewayUiStatus}>} Check result.
    */
-  async check({config, state = {}, uiSession}) {
+  async check({config, connectivityProbe, state = {}, uiSession}) {
     const status = await uiSession.readStatus(config)
+    const connectivityProbeResult = await this.connectivityProbeResult({config, connectivityProbe, status})
 
     return {
-      decision: this.evaluate({config, state, status}),
+      decision: this.evaluate({config, connectivityProbeResult, state, status}),
       status
     }
   }
@@ -115,12 +136,13 @@ export default class Watchdog {
   /**
    * @param {object} args - Reboot arguments.
    * @param {import("./config.js").default} args.config - Watchdog config.
+   * @param {ConnectivityProbe} [args.connectivityProbe] - Outbound connectivity probe.
    * @param {WatchdogState} [args.state] - Persisted watchdog state.
    * @param {{readStatus: (config: import("./config.js").default) => Promise<GatewayUiStatus>, reboot: (config: import("./config.js").default) => Promise<Record<string, unknown>>}} args.uiSession - UI automation session.
    * @returns {Promise<{decision: ReturnType<Watchdog["evaluate"]>, rebootResult: Record<string, unknown> | null, status: GatewayUiStatus}>} Reboot result.
    */
-  async rebootIfNeeded({config, state = {}, uiSession}) {
-    const checkResult = await this.check({config, state, uiSession})
+  async rebootIfNeeded({config, connectivityProbe, state = {}, uiSession}) {
+    const checkResult = await this.check({config, connectivityProbe, state, uiSession})
 
     if (!checkResult.decision.shouldReboot) {
       return {...checkResult, rebootResult: null}
@@ -135,16 +157,78 @@ export default class Watchdog {
   /**
    * @param {object} args - Health classification arguments.
    * @param {import("./config.js").default} args.config - Watchdog config.
+   * @param {ConnectivityProbeResult | null} [args.connectivityProbeResult] - Outbound probe result when checked.
    * @param {GatewayUiStatus} args.status - Latest UI status.
    * @returns {string} Health reason.
    */
-  healthReason({config, status}) {
-    const preConnectionReason = this.preConnectionHealthReason({config, status})
+  healthReason({config, connectivityProbeResult = null, status}) {
+    const preConnectionReason = this.preConnectionHealthReason({status})
 
     if (preConnectionReason) {
       return preConnectionReason
     }
 
+    const connectionHealthReason = this.connectionHealthReason({config, status})
+
+    if (connectionHealthReason === HEALTH_REASONS.healthy) {
+      if (this.connectivityProbeApplies({config, status}) && connectivityProbeResult?.ok === false) {
+        return HEALTH_REASONS.connectivityProbeFailed
+      }
+
+      return HEALTH_REASONS.healthy
+    }
+
+    if (this.insideBootGracePeriod({config, status})) {
+      return HEALTH_REASONS.bootGracePeriod
+    }
+
+    return connectionHealthReason
+  }
+
+  /**
+   * @param {object} args - Probe arguments.
+   * @param {import("./config.js").default} args.config - Watchdog config.
+   * @param {ConnectivityProbe | undefined} args.connectivityProbe - Outbound connectivity probe.
+   * @param {GatewayUiStatus} args.status - Latest UI status.
+   * @returns {Promise<ConnectivityProbeResult | null>} Probe result, or null when no probe should run.
+   */
+  async connectivityProbeResult({config, connectivityProbe, status}) {
+    if (!connectivityProbe || !this.connectivityProbeApplies({config, status})) {
+      return null
+    }
+
+    return await connectivityProbe.check(config)
+  }
+
+  /**
+   * @param {object} args - Probe gating arguments.
+   * @param {import("./config.js").default} args.config - Watchdog config.
+   * @param {GatewayUiStatus} args.status - Latest UI status.
+   * @returns {boolean} Whether the outbound probe applies to this status.
+   */
+  connectivityProbeApplies({config, status}) {
+    if (this.preConnectionHealthReason({status})) {
+      return false
+    }
+
+    if (status.uptimeMs === null || status.uptimeMs < config.connectivityProbeMinimumUptimeMs) {
+      return false
+    }
+
+    if (config.minimumUptimeBeforeRebootMs !== null && status.uptimeMs < config.minimumUptimeBeforeRebootMs) {
+      return false
+    }
+
+    return this.connectionHealthReason({config, status}) === HEALTH_REASONS.healthy
+  }
+
+  /**
+   * @param {object} args - Health classification arguments.
+   * @param {import("./config.js").default} args.config - Watchdog config.
+   * @param {GatewayUiStatus} args.status - Latest UI status.
+   * @returns {string} Connection-derived health reason.
+   */
+  connectionHealthReason({config, status}) {
     return this.connectionStateHealthReason(status.connectionState)
       ?? this.visibleTextHealthReason({config, status})
       ?? HEALTH_REASONS.unknownStatus
@@ -152,21 +236,16 @@ export default class Watchdog {
 
   /**
    * @param {object} args - Health classification arguments.
-   * @param {import("./config.js").default} args.config - Watchdog config.
    * @param {GatewayUiStatus} args.status - Latest UI status.
    * @returns {string | null} Health reason that blocks connection checks, if any.
    */
-  preConnectionHealthReason({config, status}) {
+  preConnectionHealthReason({status}) {
     if (!status.uiReachable) {
       return HEALTH_REASONS.uiUnreachable
     }
 
     if (!status.loginSucceeded) {
       return HEALTH_REASONS.loginFailed
-    }
-
-    if (this.insideBootGracePeriod({config, status})) {
-      return HEALTH_REASONS.bootGracePeriod
     }
 
     return null

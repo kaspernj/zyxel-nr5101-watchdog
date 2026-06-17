@@ -1,6 +1,6 @@
 # zyxel-nr5101-watchdog
 
-Node.js watchdog for a Zyxel NR5101 gateway. It signs in to the gateway UI, reads the visible connection state, and only requests a reboot when the connection is clearly down and startup/connection-establishing states are absent.
+Node.js watchdog for a Zyxel NR5101 gateway. It signs in to the gateway UI, reads the visible connection state, runs a TCP connectivity probe when the UI reports healthy long enough, and only requests a reboot when the connection is clearly down or the healthy UI cannot pass the outbound probe.
 
 ## Install
 
@@ -42,9 +42,16 @@ Safety timing fields:
 
 - `checkIntervalMs`: delay between `watch` checks
 - `rebootCooldownMs`: minimum time between successful watchdog reboots
-- `bootGracePeriodMs`: gateway uptime below this value blocks reboot
+- `bootGracePeriodMs`: gateway uptime below this value blocks reboot for non-healthy UI states
+- `connectivityProbeMinimumUptimeMs`: healthy gateway uptime required before the outbound probe can trigger reboot
 - `minimumUptimeBeforeRebootMs`: optional stricter uptime gate before rebooting
 - `statePath`: local JSON file storing the last successful reboot timestamp
+
+Connectivity probe fields:
+
+- `connectivityProbeHost`: TCP host to connect to through the default route, default `1.1.1.1`
+- `connectivityProbePort`: TCP port to connect to, default `443`
+- `connectivityProbeTimeoutMs`: TCP connection timeout, default `5000`
 
 Discovery fields:
 
@@ -59,12 +66,13 @@ The watchdog will not reboot when:
 - login fails
 - the connection is healthy
 - the UI says the connection is connecting, establishing, booting, initializing, or registering
-- uptime is inside `bootGracePeriodMs`
+- the UI does not report healthy/up and uptime is inside `bootGracePeriodMs`
+- the UI reports healthy/up but uptime is below `connectivityProbeMinimumUptimeMs`
 - uptime is below `minimumUptimeBeforeRebootMs`
 - `rebootCooldownMs` has not elapsed since the last successful watchdog reboot
 - the status is unknown
 
-The gateway UI can still be reachable while the Internet connection is down. This tool uses the UI reachability only as a precondition for safe inspection and reboot control, not as proof that Internet access is healthy.
+The gateway UI can still be reachable while the Internet connection is down. This tool uses the UI reachability only as a precondition for safe inspection and reboot control, not as proof that Internet access is healthy. When the UI reports healthy/up for at least `connectivityProbeMinimumUptimeMs`, the watchdog opens a TCP connection to `connectivityProbeHost:connectivityProbePort`; a failed probe is treated as `connectivity_probe_failed` and can trigger the same reboot flow as a clearly down UI status.
 
 ## Browser Automation
 

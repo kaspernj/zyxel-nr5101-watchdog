@@ -9,6 +9,7 @@ const DEFAULT_LABELS = Object.freeze({
   healthy: Object.freeze(["connected", "online", "internet connected", "up"])
 })
 
+const DEFAULT_CONNECTIVITY_PROBE_HOST = "1.1.1.1"
 const DEFAULT_STATE_PATH = "var/state.json"
 const SELECTOR_KEYS = Object.freeze(["loginButton", "passwordInput", "rebootButton", "rebootConfirmButton", "statusText", "uptimeText", "usernameInput"])
 
@@ -69,6 +70,10 @@ export default class Config {
     return new Config({
       bootGracePeriodMs: Config.durationMs(configObject.bootGracePeriodMs, `${source}.bootGracePeriodMs`, 600_000),
       checkIntervalMs: Config.durationMs(configObject.checkIntervalMs, `${source}.checkIntervalMs`, 300_000),
+      connectivityProbeHost: optionalNonBlankString(configObject.connectivityProbeHost, `${source}.connectivityProbeHost`) ?? DEFAULT_CONNECTIVITY_PROBE_HOST,
+      connectivityProbeMinimumUptimeMs: Config.durationMs(configObject.connectivityProbeMinimumUptimeMs, `${source}.connectivityProbeMinimumUptimeMs`, 300_000),
+      connectivityProbePort: Config.tcpPort(configObject.connectivityProbePort, `${source}.connectivityProbePort`, 443),
+      connectivityProbeTimeoutMs: Config.durationMs(configObject.connectivityProbeTimeoutMs, `${source}.connectivityProbeTimeoutMs`, 5_000),
       labels: Config.labelsFromObject(configObject.labels, `${source}.labels`),
       minimumUptimeBeforeRebootMs: Config.optionalDurationMs(configObject.minimumUptimeBeforeRebootMs, `${source}.minimumUptimeBeforeRebootMs`),
       password: forcedNonBlankString(configObject.password, `${source}.password`),
@@ -82,8 +87,12 @@ export default class Config {
 
   /**
    * @param {object} args - Validated config properties.
-   * @param {number} args.bootGracePeriodMs - Grace period after boot before rebooting.
+   * @param {number} args.bootGracePeriodMs - Grace period before rebooting non-healthy UI states.
    * @param {number} args.checkIntervalMs - Interval between watch checks.
+   * @param {string} args.connectivityProbeHost - TCP probe host reached through the default route.
+   * @param {number} args.connectivityProbeMinimumUptimeMs - Minimum healthy uptime before running the probe.
+   * @param {number} args.connectivityProbePort - TCP probe port.
+   * @param {number} args.connectivityProbeTimeoutMs - TCP probe timeout.
    * @param {GatewayLabels} args.labels - UI status labels.
    * @param {number | null} args.minimumUptimeBeforeRebootMs - Optional minimum uptime gate.
    * @param {string} args.password - Gateway UI password.
@@ -93,9 +102,13 @@ export default class Config {
    * @param {string} args.uiUrl - Gateway UI URL.
    * @param {string} args.username - Gateway UI username.
    */
-  constructor({bootGracePeriodMs, checkIntervalMs, labels, minimumUptimeBeforeRebootMs, password, rebootCooldownMs, selectors, statePath, uiUrl, username}) {
+  constructor({bootGracePeriodMs, checkIntervalMs, connectivityProbeHost, connectivityProbeMinimumUptimeMs, connectivityProbePort, connectivityProbeTimeoutMs, labels, minimumUptimeBeforeRebootMs, password, rebootCooldownMs, selectors, statePath, uiUrl, username}) {
     this.bootGracePeriodMs = bootGracePeriodMs
     this.checkIntervalMs = checkIntervalMs
+    this.connectivityProbeHost = connectivityProbeHost
+    this.connectivityProbeMinimumUptimeMs = connectivityProbeMinimumUptimeMs
+    this.connectivityProbePort = connectivityProbePort
+    this.connectivityProbeTimeoutMs = connectivityProbeTimeoutMs
     this.labels = labels
     this.minimumUptimeBeforeRebootMs = minimumUptimeBeforeRebootMs
     this.password = password
@@ -116,6 +129,22 @@ export default class Config {
     const durationMs = optionalPositiveInteger(raw, label)
 
     return durationMs ?? defaultValue
+  }
+
+  /**
+   * @param {unknown} raw - Raw TCP port value.
+   * @param {string} label - Error label.
+   * @param {number} defaultValue - Default port when absent.
+   * @returns {number} Validated TCP port.
+   */
+  static tcpPort(raw, label, defaultValue) {
+    const port = optionalPositiveInteger(raw, label) ?? defaultValue
+
+    if (port > 65_535) {
+      throw new RangeError(`Expected ${label} to be at most 65535`)
+    }
+
+    return port
   }
 
   /**

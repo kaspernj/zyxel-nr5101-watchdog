@@ -7,6 +7,7 @@ import {runCli} from "../src/cli.js"
 /** @typedef {import("../src/config.js").default} Config */
 /** @typedef {import("../src/watchdog.js").GatewayUiStatus} GatewayUiStatus */
 /** @typedef {{lastRebootAtMs: number | null}} WatchdogState */
+/** @typedef {{check: (config: Config) => Promise<{error: string | null, ok: boolean}>}} FakeConnectivityProbe */
 /** @typedef {{savedStates?: WatchdogState[], state?: WatchdogState}} FakeStateStoreArgs */
 /** @typedef {{load: () => Promise<WatchdogState>, save: (state: WatchdogState) => Promise<void>}} FakeStateStore */
 /** @typedef {{readStatus: (config: Config) => Promise<GatewayUiStatus>, reboot?: (config: Config) => Promise<Record<string, unknown>>}} FakeUiSession */
@@ -47,6 +48,7 @@ describe("CLI", () => {
 
       const exitCode = await runCli({
         argv: ["check", "--config", configPath],
+        connectivityProbe: successfulConnectivityProbe(),
         stateStore,
         stdout: {write: (message) => stdout.push(message)},
         uiSession
@@ -59,6 +61,47 @@ describe("CLI", () => {
           healthReason: "healthy",
           nextRebootAllowedAtMs: null,
           shouldReboot: false,
+          skipReason: null
+        }
+      })
+    })
+  })
+
+  it("check uses the injected connectivity probe before printing the decision", async () => {
+    await withTempConfig(async (configPath) => {
+      /** @type {string[]} */
+      const stdout = []
+      let probeChecked = false
+      /** @type {FakeUiSession} */
+      const uiSession = {
+        async readStatus() {
+          return healthyStatus()
+        }
+      }
+
+      const exitCode = await runCli({
+        argv: ["check", "--config", configPath],
+        connectivityProbe: {
+          async check(config) {
+            expect(config.connectivityProbeHost).toEqual("1.1.1.1")
+            probeChecked = true
+
+            return {error: "ECONNREFUSED", ok: false}
+          }
+        },
+        stateStore: fakeStateStore(),
+        stdout: {write: (message) => stdout.push(message)},
+        uiSession
+      })
+
+      expect(exitCode).toEqual(0)
+      expect(probeChecked).toEqual(true)
+      expect(JSON.parse(stdout.join(""))).toEqual({
+        command: "check",
+        decision: {
+          healthReason: "connectivity_probe_failed",
+          nextRebootAllowedAtMs: null,
+          shouldReboot: true,
           skipReason: null
         }
       })
@@ -92,6 +135,7 @@ describe("CLI", () => {
       const exitCode = await runCli({
         argv: ["reboot", "--config", configPath],
         clock: () => 7_200_000,
+        connectivityProbe: successfulConnectivityProbe(),
         stateStore: fakeStateStore({savedStates}),
         stdout: {write: () => {}},
         uiSession
@@ -145,6 +189,7 @@ describe("CLI", () => {
       const exitCode = await runCli({
         argv: ["watch", "--config", configPath],
         clock: () => 7_200_000,
+        connectivityProbe: successfulConnectivityProbe(),
         maxIterations: 2,
         sleep: async (ms) => {
           sleepCalls.push(ms)
@@ -193,6 +238,7 @@ describe("CLI", () => {
 
       const exitCode = await runCli({
         argv: ["watch", "--config", configPath],
+        connectivityProbe: successfulConnectivityProbe(),
         maxIterations: 2,
         sleep: async (ms) => {
           sleepCalls.push(ms)
@@ -230,6 +276,32 @@ describe("CLI", () => {
     })
   })
 })
+
+/**
+ * @param {Partial<GatewayUiStatus>} [overrides] - Status fields to override.
+ * @returns {GatewayUiStatus} Healthy gateway status.
+ */
+function healthyStatus(overrides = {}) {
+  return {
+    connectionState: "healthy",
+    loginSucceeded: true,
+    uiReachable: true,
+    uptimeMs: 3_600_000,
+    visibleText: "Connected",
+    ...overrides
+  }
+}
+
+/**
+ * @returns {FakeConnectivityProbe} Connectivity probe that succeeds.
+ */
+function successfulConnectivityProbe() {
+  return {
+    async check() {
+      return {error: null, ok: true}
+    }
+  }
+}
 
 /**
  * @param {FakeStateStoreArgs} [args] - Fake state-store arguments.
