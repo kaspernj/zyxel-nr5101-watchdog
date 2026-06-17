@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "bin/**/*.js",
+    "src/**/*.js",
+    "spec/**/*.js",
+    "eslint.config.js"
+  ],
+  "ignorePatterns": [
+    "build/**",
+    "coverage/**",
+    "fallow-baselines/**",
+    "node_modules/**",
+    "var/**"
+  ],
+  "duplicates": {
+    "minOccurrences": 3
+  }
+}
