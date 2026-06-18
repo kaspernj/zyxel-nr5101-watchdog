@@ -1,0 +1,10 @@
+.git
+.gitignore
+node_modules
+npm-debug.log*
+*.log
+OPENCODE_RESUME.md
+config/secrets.json
+var
+tmp
+coverage
