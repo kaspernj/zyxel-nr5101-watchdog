@@ -39,12 +39,12 @@ Build the local image:
 
 ```bash
 docker build -t zyxel-nr5101-watchdog:local .
-mkdir -p var
 ```
 
 Run a safe non-rebooting check from Docker:
 
 ```bash
+mkdir -p var
 docker run --rm \
   --network host \
   -v "$PWD/config/secrets.json:/app/config/secrets.json:ro" \
@@ -55,6 +55,7 @@ docker run --rm \
 Run the watchdog continuously from Docker:
 
 ```bash
+mkdir -p var
 docker run -d \
   --name zyxel-nr5101-watchdog \
   --restart unless-stopped \
@@ -70,7 +71,7 @@ Or use Docker Compose:
 docker compose up -d
 ```
 
-The Docker image includes Node.js, Chromium, and ChromeDriver so the existing `system-testing` browser automation can run inside the container. The examples mount `config/secrets.json` instead of baking credentials into the image, and mount `var/` so reboot cooldown state survives container restarts.
+The Docker image includes Node.js, Chromium, and ChromeDriver so the existing `system-testing` browser automation can run inside the container. The examples mount `config/secrets.json` instead of baking credentials into the image. The `docker run` examples mount `var/` so reboot cooldown state survives container restarts; create that host directory before running the container. Docker Compose uses a named `watchdog-state` volume for the same state so fresh Compose starts are writable by the container user.
 
 `--network host` is recommended on Linux so the container reaches the gateway UI and runs the connectivity probe through the host's normal LAN/default route. Docker Desktop on macOS and Windows handles host networking differently; if the router IP is reachable from normal bridge networking there, omit `--network host` and keep the same volume mounts.
 
