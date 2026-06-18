@@ -22,6 +22,7 @@ Edit `config/secrets.json` with the local gateway URL, username, and password. `
 npx zyxel-nr5101-watchdog check --config config/secrets.json
 npx zyxel-nr5101-watchdog reboot --config config/secrets.json
 npx zyxel-nr5101-watchdog watch --config config/secrets.json
+npx zyxel-nr5101-watchdog help
 ```
 
 `check` signs in, reads status, and prints a JSON decision without rebooting.
@@ -29,6 +30,8 @@ npx zyxel-nr5101-watchdog watch --config config/secrets.json
 `reboot` performs the same check and only clicks the UI reboot flow when the watchdog decision allows it.
 
 `watch` runs continuously, waiting `checkIntervalMs` between checks.
+
+`help` prints the JSON usage payload without loading configuration.
 
 ## Docker
 
