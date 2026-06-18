@@ -20,10 +20,17 @@ describe("CLI", () => {
     const exitCode = await runCli({argv: [], stdout: {write: (message) => stdout.push(message)}})
 
     expect(exitCode).toEqual(1)
-    expect(JSON.parse(stdout.join(""))).toEqual({
-      commands: ["check", "watch", "reboot"],
-      usage: "zyxel-nr5101-watchdog <command> [--config config/secrets.json]"
-    })
+    expectUsageOutput(stdout)
+  })
+
+  it("prints usage without loading config when help is requested", async () => {
+    /** @type {string[]} */
+    const stdout = []
+
+    const exitCode = await runCli({argv: ["help"], stdout: {write: (message) => stdout.push(message)}})
+
+    expect(exitCode).toEqual(0)
+    expectUsageOutput(stdout)
   })
 
   it("check loads config, reads the UI status, and prints the watchdog decision", async () => {
@@ -317,6 +324,17 @@ function fakeStateStore({savedStates = [], state = {lastRebootAtMs: null}} = {})
       savedStates.push(nextState)
     }
   }
+}
+
+/**
+ * @param {string[]} stdout - Captured stdout chunks.
+ * @returns {void}
+ */
+function expectUsageOutput(stdout) {
+  expect(JSON.parse(stdout.join(""))).toEqual({
+    commands: ["check", "watch", "reboot", "help"],
+    usage: "zyxel-nr5101-watchdog <command> [--config config/secrets.json]"
+  })
 }
 
 /**

@@ -22,6 +22,7 @@ Edit `config/secrets.json` with the local gateway URL, username, and password. `
 npx zyxel-nr5101-watchdog check --config config/secrets.json
 npx zyxel-nr5101-watchdog reboot --config config/secrets.json
 npx zyxel-nr5101-watchdog watch --config config/secrets.json
+npx zyxel-nr5101-watchdog help
 ```
 
 `check` signs in, reads status, and prints a JSON decision without rebooting.
@@ -29,6 +30,50 @@ npx zyxel-nr5101-watchdog watch --config config/secrets.json
 `reboot` performs the same check and only clicks the UI reboot flow when the watchdog decision allows it.
 
 `watch` runs continuously, waiting `checkIntervalMs` between checks.
+
+`help` prints the JSON usage payload without loading configuration.
+
+## Docker
+
+Build the local image:
+
+```bash
+docker build -t zyxel-nr5101-watchdog:local .
+```
+
+Run a safe non-rebooting check from Docker:
+
+```bash
+mkdir -p var
+docker run --rm \
+  --network host \
+  -v "$PWD/config/secrets.json:/app/config/secrets.json:ro" \
+  -v "$PWD/var:/app/var" \
+  zyxel-nr5101-watchdog:local check --config /app/config/secrets.json
+```
+
+Run the watchdog continuously from Docker:
+
+```bash
+mkdir -p var
+docker run -d \
+  --name zyxel-nr5101-watchdog \
+  --restart unless-stopped \
+  --network host \
+  -v "$PWD/config/secrets.json:/app/config/secrets.json:ro" \
+  -v "$PWD/var:/app/var" \
+  zyxel-nr5101-watchdog:local
+```
+
+Or use Docker Compose:
+
+```bash
+docker compose up -d
+```
+
+The Docker image includes Node.js, Chromium, and ChromeDriver so the existing `system-testing` browser automation can run inside the container. The examples mount `config/secrets.json` instead of baking credentials into the image. The `docker run` examples mount `var/` so reboot cooldown state survives container restarts; create that host directory before running the container. Docker Compose uses a named `watchdog-state` volume for the same state so fresh Compose starts are writable by the container user.
+
+`--network host` is recommended on Linux so the container reaches the gateway UI and runs the connectivity probe through the host's normal LAN/default route. Docker Desktop on macOS and Windows handles host networking differently; if the router IP is reachable from normal bridge networking there, omit `--network host` and keep the same volume mounts.
 
 ## Configuration
 

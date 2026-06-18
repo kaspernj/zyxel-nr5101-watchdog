@@ -1,0 +1,14 @@
+services:
+  watchdog:
+    build: .
+    image: zyxel-nr5101-watchdog:local
+    init: true
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./config/secrets.json:/app/config/secrets.json:ro
+      - watchdog-state:/app/var
+    command: ["watch", "--config", "/app/config/secrets.json"]
+
+volumes:
+  watchdog-state:

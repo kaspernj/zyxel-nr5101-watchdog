@@ -51,6 +51,13 @@ export async function main(argv = process.argv.slice(2)) {
  */
 export async function runCli({argv = process.argv.slice(2), clock = () => Date.now(), connectivityProbe = new TcpConnectivityProbe(), maxIterations, sleep = sleepMs, stateStore, stdout = process.stdout, uiSession = new SystemTestingUiSession()} = {}) {
   const {command, configPath} = parseCliArgs(argv)
+
+  if (command === "help") {
+    writeUsage(stdout)
+
+    return 0
+  }
+
   const commandHandler = commandHandlerFor(command)
 
   if (!commandHandler) {
@@ -175,7 +182,7 @@ function uiUnreachableStatus() {
  */
 function parseCliArgs(argv) {
   return {
-    command: argv[0] ?? "help",
+    command: argv[0] ?? "",
     configPath: configPathFromArgs(argv.slice(1))
   }
 }
@@ -270,7 +277,7 @@ function writeJsonLine(stdout, payload) {
  * @returns {void}
  */
 function writeUsage(stdout) {
-  writeJsonLine(stdout, {commands: ["check", "watch", "reboot"], usage: "zyxel-nr5101-watchdog <command> [--config config/secrets.json]"})
+  writeJsonLine(stdout, {commands: ["check", "watch", "reboot", "help"], usage: "zyxel-nr5101-watchdog <command> [--config config/secrets.json]"})
 }
 
 /**
