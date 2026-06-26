@@ -131,6 +131,8 @@ Commands print JSON lines to stdout. The output includes the command and watchdo
 
 Run `watch` from a process manager such as systemd, cron with locking, or another supervisor. Use the same project directory so `statePath` resolves consistently, or set `statePath` to an absolute path in `config/secrets.json`.
 
+Operational notes for the local OpenWrt router at `192.168.86.7` live in [`docs/openwrt-router-routing.md`](docs/openwrt-router-routing.md).
+
 ## Development
 
 Run focused Velocious specs while changing behavior:
