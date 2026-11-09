@@ -1,3 +1,7 @@
+paths:
+  - "**/*"
+  - "!README.md"
+  - "!AGENTS.md"
 before_script:
   - npm install
 script:
